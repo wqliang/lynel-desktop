@@ -92,6 +92,77 @@ export async function deleteEntry(filePath: string): Promise<void> {
   else await fs.promises.unlink(filePath);
 }
 
+/** 目标目录内生成不冲突文件名：原名 → `stem - 副本.ext` → `stem - 副本 (2).ext`...（永不覆盖） */
+export function uniqueDestName(destDir: string, name: string): string {
+  const exists = (n: string) => fs.existsSync(path.join(destDir, n));
+  if (!exists(name)) return name;
+  const dot = name.lastIndexOf('.');
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : '';
+  const first = `${stem} - 副本${ext}`;
+  if (!exists(first)) return first;
+  for (let i = 2; i <= 999; i++) {
+    const cand = `${stem} - 副本 (${i})${ext}`;
+    if (!exists(cand)) return cand;
+  }
+  throw new Error('同名副本过多');
+}
+
+export interface CopyEntriesResult {
+  ok: string[];
+  failed: { path: string; error: string }[];
+}
+
+/** 复制/移动多个源到 destWorkDir/destParentRel；逐个处理不整体回滚。
+ *  同名自动重命名（含 move），目标为源自身或子目录时拒绝（防递归爆炸）。 */
+export async function copyEntries(
+  srcPaths: string[],
+  destWorkDir: string,
+  destParentRel: string,
+  mode: 'copy' | 'move',
+): Promise<CopyEntriesResult> {
+  const ok: string[] = [];
+  const failed: { path: string; error: string }[] = [];
+  const destDir = resolveEntry(destWorkDir, destParentRel);
+  const relOf = (name: string) => (destParentRel ? `${destParentRel}/${name}` : name);
+  for (const src of srcPaths) {
+    try {
+      const resolvedSrc = path.resolve(src);
+      try {
+        await fs.promises.lstat(resolvedSrc);
+      } catch {
+        throw new Error(`源文件不存在：${src}`);
+      }
+      if (destDir === resolvedSrc || destDir.startsWith(resolvedSrc + path.sep)) {
+        throw new Error('目标不能是源自身或其子目录');
+      }
+      const base = path.basename(resolvedSrc);
+      if (mode === 'move' && path.dirname(resolvedSrc) === destDir) {
+        ok.push(relOf(base)); // 同目录移动 = no-op
+        continue;
+      }
+      const name = uniqueDestName(destDir, base);
+      const dest = path.join(destDir, name);
+      if (mode === 'copy') {
+        await fs.promises.cp(resolvedSrc, dest, { recursive: true });
+      } else {
+        try {
+          await fs.promises.rename(resolvedSrc, dest);
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException)?.code === 'EXDEV') {
+            await fs.promises.cp(resolvedSrc, dest, { recursive: true });
+            await fs.promises.rm(resolvedSrc, { recursive: true, force: true });
+          } else throw e;
+        }
+      }
+      ok.push(relOf(name));
+    } catch (e) {
+      failed.push({ path: src, error: (e as Error)?.message ?? String(e) });
+    }
+  }
+  return { ok, failed };
+}
+
 // —— 以下为文件服务 IPC + 目录监听 ——
 const watchers = new Map<string, fs.FSWatcher>();
 const watcherTimers = new Map<string, NodeJS.Timeout>();

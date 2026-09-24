@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { isIgnored, detectBinary, listDir, resolveEntry, readFileEntry, writeFileEntry, createEntry, renameEntry, deleteEntry, startWatch, stopWatch, MAX_TEXT_SIZE } from '../../src/main/files.js'
+import { isIgnored, detectBinary, listDir, resolveEntry, readFileEntry, writeFileEntry, createEntry, renameEntry, deleteEntry, startWatch, stopWatch, MAX_TEXT_SIZE, uniqueDestName, copyEntries } from '../../src/main/files.js'
 import { getBus } from '../../src/main/events.js'
 
 describe('isIgnored', () => {
@@ -205,5 +205,113 @@ describe('file watcher', () => {
     fs.writeFileSync(f, 'v3')
     await new Promise((r) => setTimeout(r, 600))
     expect(events.length).toBe(before)
+  })
+})
+
+describe('uniqueDestName', () => {
+  let dest: string
+  beforeEach(() => { dest = fs.mkdtempSync(path.join(os.tmpdir(), 'lynel-unique-')) })
+  afterEach(() => { fs.rmSync(dest, { recursive: true, force: true }) })
+
+  it('无冲突返回原名', () => {
+    expect(uniqueDestName(dest, 'a.ts')).toBe('a.ts')
+  })
+  it('单次冲突加「- 副本」，扩展名保留', () => {
+    fs.writeFileSync(path.join(dest, 'a.ts'), 'x')
+    expect(uniqueDestName(dest, 'a.ts')).toBe('a - 副本.ts')
+  })
+  it('连续冲突递增 (2)', () => {
+    fs.writeFileSync(path.join(dest, 'a.ts'), 'x')
+    fs.writeFileSync(path.join(dest, 'a - 副本.ts'), 'x')
+    expect(uniqueDestName(dest, 'a.ts')).toBe('a - 副本 (2).ts')
+  })
+  it('点开头文件整名当 stem', () => {
+    fs.writeFileSync(path.join(dest, '.gitignore'), 'x')
+    expect(uniqueDestName(dest, '.gitignore')).toBe('.gitignore - 副本')
+  })
+  it('目录无扩展名直接加后缀', () => {
+    fs.mkdirSync(path.join(dest, 'src'))
+    expect(uniqueDestName(dest, 'src')).toBe('src - 副本')
+  })
+})
+
+describe('copyEntries', () => {
+  let root: string
+  beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'lynel-copy-')) })
+  afterEach(() => { fs.rmSync(root, { recursive: true, force: true }) })
+
+  it('copy 文件到目标目录，返回新 relPath，源保留', async () => {
+    const srcDir = path.join(root, 'src'); fs.mkdirSync(srcDir)
+    fs.writeFileSync(path.join(srcDir, 'a.ts'), 'hello')
+    const destDir = path.join(root, 'dest'); fs.mkdirSync(destDir)
+    const r = await copyEntries([path.join(srcDir, 'a.ts')], root, 'dest', 'copy')
+    expect(r.failed).toEqual([])
+    expect(r.ok).toEqual(['dest/a.ts'])
+    expect(fs.readFileSync(path.join(destDir, 'a.ts'), 'utf8')).toBe('hello')
+    expect(fs.existsSync(path.join(srcDir, 'a.ts'))).toBe(true)
+  })
+
+  it('copy 目标已同名：自动重命名不覆盖', async () => {
+    const srcDir = path.join(root, 'src'); fs.mkdirSync(srcDir)
+    fs.writeFileSync(path.join(srcDir, 'a.ts'), 'new')
+    const destDir = path.join(root, 'dest'); fs.mkdirSync(destDir)
+    fs.writeFileSync(path.join(destDir, 'a.ts'), 'old')
+    const r = await copyEntries([path.join(srcDir, 'a.ts')], root, 'dest', 'copy')
+    expect(r.ok).toEqual(['dest/a - 副本.ts'])
+    expect(fs.readFileSync(path.join(destDir, 'a.ts'), 'utf8')).toBe('old')
+    expect(fs.readFileSync(path.join(destDir, 'a - 副本.ts'), 'utf8')).toBe('new')
+  })
+
+  it('copy 目录递归（根下已有同名 → 副本）', async () => {
+    const srcDir = path.join(root, 'lib'); fs.mkdirSync(path.join(srcDir, 'sub'), { recursive: true })
+    fs.writeFileSync(path.join(srcDir, 'sub', 'b.js'), 'x')
+    const r = await copyEntries([srcDir], root, '', 'copy')
+    expect(r.failed).toEqual([])
+    expect(r.ok).toEqual(['lib - 副本'])
+    expect(fs.readFileSync(path.join(root, 'lib - 副本', 'sub', 'b.js'), 'utf8')).toBe('x')
+    expect(fs.existsSync(path.join(root, 'lib', 'sub', 'b.js'))).toBe(true) // 源保留
+  })
+
+  it('move 跨目录改路径，move 同名也重命名不覆盖', async () => {
+    const a = path.join(root, 'a'); fs.mkdirSync(a)
+    const b = path.join(root, 'b'); fs.mkdirSync(b)
+    fs.writeFileSync(path.join(a, 't.ts'), 'src')
+    fs.writeFileSync(path.join(b, 't.ts'), 'dest')
+    const r = await copyEntries([path.join(a, 't.ts')], root, 'b', 'move')
+    expect(r.failed).toEqual([])
+    expect(r.ok).toEqual(['b/t - 副本.ts'])
+    expect(fs.existsSync(path.join(a, 't.ts'))).toBe(false)
+    expect(fs.readFileSync(path.join(b, 't.ts'), 'utf8')).toBe('dest')
+    expect(fs.readFileSync(path.join(b, 't - 副本.ts'), 'utf8')).toBe('src')
+  })
+
+  it('move 同目录 = no-op，不产生副本', async () => {
+    const a = path.join(root, 'a'); fs.mkdirSync(a)
+    fs.writeFileSync(path.join(a, 't.ts'), 'x')
+    const r = await copyEntries([path.join(a, 't.ts')], root, 'a', 'move')
+    expect(r.failed).toEqual([])
+    expect(r.ok).toEqual(['a/t.ts'])
+    expect(fs.readdirSync(a)).toEqual(['t.ts'])
+  })
+
+  it('目标是源子目录：拒绝且源完好', async () => {
+    const lib = path.join(root, 'lib'); fs.mkdirSync(path.join(lib, 'sub'), { recursive: true })
+    const r = await copyEntries([lib], root, 'lib/sub', 'move')
+    expect(r.ok).toEqual([])
+    expect(r.failed[0].error).toContain('目标不能是源自身或其子目录')
+    expect(fs.existsSync(path.join(lib, 'sub'))).toBe(true)
+  })
+
+  it('源不存在进 failed，错误文案含「源文件不存在」', async () => {
+    const r = await copyEntries([path.join(root, 'ghost.ts')], root, '', 'copy')
+    expect(r.ok).toEqual([])
+    expect(r.failed[0].error).toContain('源文件不存在')
+  })
+
+  it('destParentRel 空串 = workDir 根', async () => {
+    fs.writeFileSync(path.join(root, 'r.ts'), 'x')
+    // 源在根下、目标也是根 —— 同目录 copy 产生副本
+    const r = await copyEntries([path.join(root, 'r.ts')], root, '', 'copy')
+    expect(r.ok).toEqual(['r - 副本.ts'])
   })
 })
