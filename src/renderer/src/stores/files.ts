@@ -40,9 +40,8 @@ export const useFilesStore = defineStore('files', () => {
   const drafts = ref<Record<string, string>>({})
   const activeRelPath = ref<string | null>(null)
   const collapsed = ref(false) // 侧栏折叠态（HomeView 持有也可，先放这里）
-  const rootCreateRequest = ref(0) // 工具条「新建文件」请求计数：+1 触发树根弹行内输入
-  /** 工具条「新建文件」请求计数：+1 触发树按选中态弹行内输入（接替 rootCreateRequest，
-   *  旧实现硬编码根目录，现跟随 selectedRelPath 解析目标） */
+  /** 工具条「新建文件」请求计数：+1 触发树按选中态弹行内输入（旧实现 rootCreateRequest
+   *  硬编码根目录，现跟随 selectedRelPath 解析目标） */
   const createAtRequest = ref(0)
   /** 树选中项（单选；多选不做）。点击行设置，setSession 重置，rename/delete 迁移或清除 */
   const selectedRelPath = ref<string | null>(null)
@@ -99,7 +98,6 @@ export const useFilesStore = defineStore('files', () => {
     activeView.value = 'file'
     currentSessionId.value = id
     tree.value = { '': [] }
-    rootCreateRequest.value = 0
     createAtRequest.value = 0
     selectedRelPath.value = null
     dragRel.value = null
@@ -449,7 +447,7 @@ export const useFilesStore = defineStore('files', () => {
   initWatcher()
 
   return {
-    workDir, currentSessionId, tree, expanded, openFiles, drafts, activeRelPath, collapsed, rootCreateRequest,
+    workDir, currentSessionId, tree, expanded, openFiles, drafts, activeRelPath, collapsed,
     createAtRequest, selectedRelPath, clipboard, dragRel, dropTargetRel,
     splitOpen,
     diffRequest, activeView, openDiff, closeDiff, activateFile,

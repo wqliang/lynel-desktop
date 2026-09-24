@@ -32,13 +32,11 @@ const dirName = computed(() => {
 
 // ---------- 工具条动作 ----------
 function onRefresh() {
-  const dirs = new Set([''])
-  for (const d of store.expanded) dirs.add(d)
-  void Promise.all(Array.from(dirs).map((d) => store.loadDir(d).catch(() => {})))
+  void store.refreshAll() // 原内联刷新逻辑迁 store（菜单「刷新」共用，DRY）
 }
 
 function onNewFile() {
-  store.rootCreateRequest++
+  store.createAtRequest++
 }
 
 function onCollapse() {

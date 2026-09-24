@@ -12,10 +12,7 @@ interface EditState {
 interface MenuState {
   x: number
   y: number
-  relPath: string
-  name: string
-  isDir: boolean
-  parentRel: string
+  target: MenuTarget
 }
 interface TreeRowCtx {
   editing: Ref<EditState | null>
@@ -29,8 +26,10 @@ const TREE_ROW_CTX: InjectionKey<TreeRowCtx> = Symbol('tree-row-ctx')
 </script>
 
 <script setup lang="ts">
-import { computed, inject, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
+import { computed, inject, nextTick, onMounted, provide, ref, watch } from 'vue'
 import Icon from '../Icon.vue'
+import TreeContextMenu from './TreeContextMenu.vue'
+import { parentOf, baseName, absJoin, resolveCreateTarget, type MenuTarget } from '../../utils/fileTree'
 import { useFilesStore, type TreeEntry } from '../../stores/files'
 
 // ---------- 文件类型图标（vscode-icons 提取的本地 SVG 资产） ----------
@@ -112,25 +111,40 @@ function entryRel(entry: TreeEntry): string {
 function onRowClick(entry: TreeEntry) {
   if (editing.value) return // 编辑态下避免误触
   const rel = entryRel(entry)
+  store.select(rel)
   if (entry.isDir) store.toggleExpand(rel, true)
   else store.openFile(rel)
 }
 
 function openMenu(e: MouseEvent, entry: TreeEntry) {
-  // fixed 定位浮层，边缘处收拢避免溢出视口
+  // fixed 定位浮层；视口收拢交给 TreeContextMenu
   menu.value = {
-    x: Math.min(e.clientX, window.innerWidth - 150),
-    y: Math.min(e.clientY, window.innerHeight - 150),
-    relPath: entryRel(entry),
-    name: entry.name,
-    isDir: entry.isDir,
-    parentRel: props.relPath,
+    x: e.clientX,
+    y: e.clientY,
+    target: {
+      kind: entry.isDir ? 'dir' : 'file',
+      relPath: entryRel(entry),
+      name: entry.name,
+      parentRel: props.relPath,
+    },
+  }
+}
+
+/** 空白处右键（根容器）：目标 = 根。行上已 .stop 不会冒泡到这里 */
+function openBlankMenu(e: MouseEvent) {
+  menu.value = {
+    x: e.clientX,
+    y: e.clientY,
+    target: { kind: 'blank', relPath: '', name: '', parentRel: '' },
   }
 }
 
 function closeMenu() {
   menu.value = null
 }
+
+// 根容器元素：点击（含点行冒泡）时拿焦点，让容器上的 @keydown（F2/Delete/Esc）可触发
+const fileTreeEl = ref<HTMLElement | null>(null)
 
 // ---------- 行内编辑 ----------
 function isEditingEntry(entry: TreeEntry): boolean {
@@ -164,49 +178,41 @@ function cancelEdit() {
   editing.value = null
 }
 
-// ---------- 菜单动作 ----------
-function menuNewFile() {
-  const m = menu.value
-  if (!m) return
-  closeMenu()
-  startCreate(m.parentRel, false)
-}
-function menuNewFolder() {
-  const m = menu.value
-  if (!m) return
-  closeMenu()
-  startCreate(m.parentRel, true)
-}
-function menuRename() {
-  const m = menu.value
-  if (!m) return
-  closeMenu()
-  editing.value = { kind: 'rename', parentRel: m.parentRel, isDir: m.isDir, name: m.name, oldRel: m.relPath }
-}
-function menuDelete() {
-  const m = menu.value
-  if (!m) return
-  closeMenu()
-  store.deleteEntry(m.relPath)
+// ---------- 菜单动作分发 ----------
+/** 菜单动作分发：目标目录语义 dir=自身 / file=父 / blank=根 */
+function dirOf(t: MenuTarget): string {
+  if (t.kind === 'dir') return t.relPath
+  if (t.kind === 'file') return t.parentRel
+  return ''
 }
 
-// ---------- 点外部关闭菜单（仅根实例挂监听） ----------
-const menuEl = ref<HTMLElement | null>(null)
-if (isRoot) {
-  onMounted(() => {
-    document.addEventListener('click', onDocClick)
-    document.addEventListener('contextmenu', onDocCtx)
-  })
-  onBeforeUnmount(() => {
-    document.removeEventListener('click', onDocClick)
-    document.removeEventListener('contextmenu', onDocCtx)
-  })
+function startRenameAt(t: MenuTarget) {
+  editing.value = {
+    kind: 'rename',
+    parentRel: t.parentRel,
+    isDir: t.kind === 'dir',
+    name: t.name,
+    oldRel: t.relPath,
+  }
 }
-function onDocClick(e: MouseEvent) {
-  if (menuEl.value && !menuEl.value.contains(e.target as Node)) closeMenu()
-}
-function onDocCtx() {
-  closeMenu()
+
+function onMenuAction(action: string, t: MenuTarget) {
+  closeMenu() // TreeContextMenu 自己也 emit close，这里兜底保证状态清干净
+  switch (action) {
+    case 'new-file': startCreate(dirOf(t), false); break
+    case 'new-folder': startCreate(dirOf(t), true); break
+    case 'open': store.openFile(t.relPath); break
+    case 'copy-path': void store.copyPath(t.relPath, true); break
+    case 'copy-relpath': void store.copyPath(t.relPath, false); break
+    case 'copy': void store.setClipboard(t.relPath, 'copy'); break
+    case 'cut': void store.setClipboard(t.relPath, 'cut'); break
+    case 'paste': void store.pasteInto(dirOf(t)); break
+    case 'rename': startRenameAt(t); break
+    case 'reveal': void store.revealEntry(t.relPath); break
+    case 'delete': void store.deleteEntry(t.relPath); break
+    case 'collapse-all': store.collapseAll(); break
+    case 'refresh': void store.refreshAll(); break
+  }
 }
 
 // ---------- 编辑态下自动聚焦输入框 ----------
@@ -225,47 +231,48 @@ onMounted(() => {
   if (creatingHere.value) editInput.value?.focus()
 })
 
-// 工具条「新建文件」按钮联动：+1 时在树根（relPath==='' 的递归实例）弹行内输入。
-// 根实例 relPath 为 undefined（只渲染容器），不响应；仅 v > old 防止 setSession 清零造成误触发。
+// 工具条「新建文件」按钮联动：+1 时按选中态解析目标目录弹行内输入
+// （旧实现硬编码根目录；现在 选中目录→该目录 / 选中文件→父 / 无选中→根）。
+// 仅 v > old 防止 setSession 清零造成误触发；editing 由所有实例共享（provide），
+// 但 ghost 行只在 parentRel 匹配的实例渲染，根实例触发即可。
 watch(
-  () => store.rootCreateRequest,
+  () => store.createAtRequest,
   (v, old) => {
-    if (v > old && props.relPath === '') startCreate('', false)
+    if (v > old && isRoot) {
+      const sel = store.selectedRelPath
+      startCreate(resolveCreateTarget(sel, sel ? store.entryIsDir(sel) : null), false)
+    }
   },
 )
 </script>
 
 <template>
   <!-- 根实例：外层容器 + 空状态 + 右键浮层 -->
-  <div v-if="isRoot" class="file-tree" @contextmenu.prevent>
+  <div
+    v-if="isRoot"
+    ref="fileTreeEl"
+    class="file-tree"
+    tabindex="-1"
+    @contextmenu.prevent.stop="openBlankMenu($event)"
+    @click="fileTreeEl?.focus()"
+  >
     <div v-if="!store.workDir" class="tree-empty">无工作目录</div>
-    <div v-else-if="!store.tree['']?.length" class="tree-empty">空</div>
-    <TreeRow v-else :rel-path="''" :depth="0" />
+    <TreeRow
+      v-else-if="(store.tree['']?.length ?? 0) > 0 || creatingHere"
+      :rel-path="''"
+      :depth="0"
+    />
+    <div v-else class="tree-empty">空</div>
 
-    <div
+    <TreeContextMenu
       v-if="menu"
-      ref="menuEl"
-      class="ctx-menu"
-      :style="{ left: menu.x + 'px', top: menu.y + 'px' }"
-      @click.stop
-    >
-      <div v-if="menu.isDir" class="menu-item" @click="menuNewFile()">
-        <Icon name="file-text" :size="13" />
-        <span>新建文件</span>
-      </div>
-      <div v-if="menu.isDir" class="menu-item" @click="menuNewFolder()">
-        <Icon name="folder-open" :size="13" />
-        <span>新建文件夹</span>
-      </div>
-      <div class="menu-item" @click="menuRename()">
-        <Icon name="pencil" :size="13" />
-        <span>重命名</span>
-      </div>
-      <div class="menu-item danger" @click="menuDelete()">
-        <Icon name="trash" :size="13" />
-        <span>删除</span>
-      </div>
-    </div>
+      :target="menu.target"
+      :x="menu.x"
+      :y="menu.y"
+      :show-paste="!!store.clipboard"
+      @action="onMenuAction"
+      @close="closeMenu"
+    />
   </div>
 
   <!-- 递归实例：渲染本目录的条目行 -->
@@ -276,6 +283,8 @@ watch(
         :class="{
           'is-dir': entry.isDir,
           active: !entry.isDir && store.activeRelPath === entryRel(entry),
+          selected: store.selectedRelPath === entryRel(entry),
+          cut: store.clipboard?.op === 'cut' && store.clipboard.paths.includes(absJoin(store.workDir, entryRel(entry))),
         }"
         :style="{ paddingLeft: depth * 12 + 'px' }"
         @click="onRowClick(entry)"
@@ -415,28 +424,11 @@ watch(
   border-radius: var(--radius-sm);
   outline: none;
 }
-.ctx-menu {
-  position: fixed;
-  z-index: 1000;
-  min-width: 136px;
-  padding: 4px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-panel);
-}
-.menu-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
-  font-size: var(--fs-body-sm);
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-.menu-item:hover { background: var(--bg-hover); color: var(--text-primary); }
-.menu-item.danger { color: var(--status-error); }
-.menu-item.danger:hover { background: var(--status-error-soft); }
 .icon-dir { color: var(--term-blue); }
+.row.selected {
+  background: var(--bg-selected);
+  box-shadow: inset 0 0 0 1px var(--accent-soft-border);
+}
+.row.cut { opacity: 0.5; }
+.file-tree:focus { outline: none; }
 </style>
