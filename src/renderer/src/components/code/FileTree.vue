@@ -143,6 +143,76 @@ function closeMenu() {
   menu.value = null
 }
 
+// ---------- 拖拽移动（HTML5 DnD；单文件拖拽，多选不做） ----------
+function onDragStart(e: DragEvent, entry: TreeEntry) {
+  const rel = entryRel(entry)
+  store.dragRel = rel
+  e.dataTransfer?.setData('text/plain', rel)
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+}
+
+/** 落点目录：目录行=自身，文件行=其父目录 */
+function dropDirOf(entry: TreeEntry): string {
+  const rel = entryRel(entry)
+  return entry.isDir ? rel : parentOf(rel)
+}
+
+/** 拒绝自我拖拽与拖入自身子孙（防递归爆炸；主进程 copyEntries 仍会兜底校验） */
+function isIllegalDrop(src: string, dest: string): boolean {
+  return !src || dest === src || dest.startsWith(src + '/') || dest === parentOf(src)
+  // dest === parentOf(src) = 同目录移动，no-op 没意义，也拒绝高亮
+}
+
+function onDragOver(e: DragEvent, entry: TreeEntry) {
+  const src = store.dragRel
+  if (!src) return
+  const dest = dropDirOf(entry)
+  if (isIllegalDrop(src, dest)) return
+  e.preventDefault()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+  store.dropTargetRel = dest
+}
+
+function onDrop(e: DragEvent, entry: TreeEntry) {
+  e.preventDefault()
+  const src = store.dragRel
+  const dest = dropDirOf(entry)
+  store.dragRel = null
+  store.dropTargetRel = null
+  if (!src || isIllegalDrop(src, dest)) return
+  void store.moveEntry(src, dest)
+}
+
+function onDragEnd() {
+  store.dragRel = null
+  store.dropTargetRel = null
+}
+
+// ---------- 快捷键（树容器聚焦时生效；input 内不劫持） ----------
+function onTreeKeydown(e: KeyboardEvent) {
+  const el = e.target as HTMLElement | null
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return
+  const sel = store.selectedRelPath
+  if (e.key === 'F2') {
+    if (!sel) return
+    e.preventDefault()
+    startRenameAt({
+      kind: store.entryIsDir(sel) === true ? 'dir' : 'file',
+      relPath: sel,
+      name: baseName(sel),
+      parentRel: parentOf(sel),
+    })
+  } else if (e.key === 'Delete') {
+    if (!sel) return
+    e.preventDefault()
+    void store.deleteEntry(sel)
+  } else if (e.key === 'Escape') {
+    if (menu.value) { closeMenu(); return }
+    e.preventDefault()
+    store.select(null)
+  }
+}
+
 // 根容器元素：点击（含点行冒泡）时拿焦点，让容器上的 @keydown（F2/Delete/Esc）可触发
 const fileTreeEl = ref<HTMLElement | null>(null)
 
@@ -255,6 +325,7 @@ watch(
     tabindex="-1"
     @contextmenu.prevent.stop="openBlankMenu($event)"
     @click="fileTreeEl?.focus()"
+    @keydown="onTreeKeydown"
   >
     <div v-if="!store.workDir" class="tree-empty">无工作目录</div>
     <TreeRow
@@ -285,10 +356,17 @@ watch(
           active: !entry.isDir && store.activeRelPath === entryRel(entry),
           selected: store.selectedRelPath === entryRel(entry),
           cut: store.clipboard?.op === 'cut' && store.clipboard.paths.includes(absJoin(store.workDir, entryRel(entry))),
+          'drop-target': store.dropTargetRel === entryRel(entry) && entry.isDir,
+          dragging: store.dragRel === entryRel(entry),
         }"
         :style="{ paddingLeft: depth * 12 + 'px' }"
+        :draggable="!(editing && isEditingEntry(entry))"
         @click="onRowClick(entry)"
         @contextmenu.prevent.stop="openMenu($event, entry)"
+        @dragstart="onDragStart($event, entry)"
+        @dragover="onDragOver($event, entry)"
+        @drop="onDrop($event, entry)"
+        @dragend="onDragEnd()"
       >
         <template v-if="editing && isEditingEntry(entry)">
           <img
@@ -430,5 +508,10 @@ watch(
   box-shadow: inset 0 0 0 1px var(--accent-soft-border);
 }
 .row.cut { opacity: 0.5; }
+.row.drop-target {
+  background: var(--accent-soft-bg);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.row.dragging { opacity: 0.4; }
 .file-tree:focus { outline: none; }
 </style>
