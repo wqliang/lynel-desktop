@@ -3,8 +3,10 @@ import { ref } from 'vue'
 import {
   FileListDir, FileRead, FileWrite, FileCreate, FileRename, FileDelete,
   FileWatch, FileUnwatch, FileChanged,
+  FileCopy, FileReveal, FileClipWrite, FileClipRead, ClipboardWrite,
 } from '../composables/useElectron'
 import { pushToast } from '../composables/useToast'
+import { parentOf, absJoin } from '../utils/fileTree'
 
 export interface TreeEntry { name: string; isDir: boolean }
 export interface OpenFile {
@@ -39,6 +41,16 @@ export const useFilesStore = defineStore('files', () => {
   const activeRelPath = ref<string | null>(null)
   const collapsed = ref(false) // 侧栏折叠态（HomeView 持有也可，先放这里）
   const rootCreateRequest = ref(0) // 工具条「新建文件」请求计数：+1 触发树根弹行内输入
+  /** 工具条「新建文件」请求计数：+1 触发树按选中态弹行内输入（接替 rootCreateRequest，
+   *  旧实现硬编码根目录，现跟随 selectedRelPath 解析目标） */
+  const createAtRequest = ref(0)
+  /** 树选中项（单选；多选不做）。点击行设置，setSession 重置，rename/delete 迁移或清除 */
+  const selectedRelPath = ref<string | null>(null)
+  /** 应用内文件剪贴板：绝对路径列表。切会话保留（跨会话复制是合理场景） */
+  const clipboard = ref<{ op: 'cut' | 'copy'; paths: string[] } | null>(null)
+  /** 拖拽瞬态：源 relPath / 落点目录 relPath（null = 未在拖） */
+  const dragRel = ref<string | null>(null)
+  const dropTargetRel = ref<string | null>(null)
   /** 当前打开的 diff（null = 没有 diff tab）。
    *  left / right 是要对比的两个 revision；right 为 `WORKTREE` 时表示右侧取工作区文件内容
    *  （而不是某个 revision 里的版本）。label 是标签栏上的对比说明（工作区 / 暂存区 / 短 hash）。 */
@@ -88,6 +100,11 @@ export const useFilesStore = defineStore('files', () => {
     currentSessionId.value = id
     tree.value = { '': [] }
     rootCreateRequest.value = 0
+    createAtRequest.value = 0
+    selectedRelPath.value = null
+    dragRel.value = null
+    dropTargetRel.value = null
+    // clipboard 刻意不清：跨会话粘贴
     // 3. 恢复新会话现场；无则初始化空
     const saved = id ? sessionState.value[id] : undefined
     if (saved) {
@@ -267,6 +284,7 @@ export const useFilesStore = defineStore('files', () => {
       // 重命名打开的 tab
       openFiles.value = openFiles.value.map((o) => o.relPath === oldRel ? { ...o, relPath: newRel } : o)
       if (activeRelPath.value === oldRel) activeRelPath.value = newRel
+      if (selectedRelPath.value === oldRel) selectedRelPath.value = newRel
       // 迁移未保存草稿到新 relPath，避免重命名后编辑器丢失未保存内容
       if (oldRel in drafts.value) {
         const next = { ...drafts.value }
@@ -292,6 +310,7 @@ export const useFilesStore = defineStore('files', () => {
       // 关闭被删文件的 tab
       openFiles.value = openFiles.value.filter((o) => o.relPath !== relPath)
       clearDraft(relPath)
+      if (selectedRelPath.value === relPath) selectedRelPath.value = null
       if (activeRelPath.value === relPath) {
         activeRelPath.value = openFiles.value[openFiles.value.length - 1]?.relPath ?? null
       }
@@ -299,6 +318,118 @@ export const useFilesStore = defineStore('files', () => {
       // 管理操作失败由 store 负责提示，调用方无需处理
       pushToast({ level: 'error', source: 'file', message: `删除失败：${e?.message ?? e}` })
     }
+  }
+
+  /** 设置选中项（null 取消选中） */
+  function select(rel: string | null) {
+    selectedRelPath.value = rel
+  }
+
+  /** 从已加载的 tree 判断条目是否目录；查不到（未加载/已删除）返回 null */
+  function entryIsDir(rel: string): boolean | null {
+    const parent = parentOf(rel)
+    const name = rel.slice(parent ? parent.length + 1 : 0)
+    const e = tree.value[parent]?.find((x) => x.name === name)
+    return e ? e.isDir : null
+  }
+
+  /** 复制/剪切：写内部剪贴板并同步系统剪贴板（外部粘贴依赖） */
+  async function setClipboard(relPath: string, op: 'cut' | 'copy') {
+    const wd = workDir.value
+    if (!wd || !relPath) return
+    const paths = [absJoin(wd, relPath)]
+    clipboard.value = { op, paths }
+    await FileClipWrite(paths).catch(() => {}) // 系统剪贴板失败不阻塞内部粘贴
+  }
+
+  /** 复制路径（绝对）/ 复制相对路径 → 系统剪贴板文本 */
+  async function copyPath(relPath: string, absolute: boolean) {
+    const wd = workDir.value
+    if (!wd) return
+    try {
+      await ClipboardWrite(absolute ? absJoin(wd, relPath) : relPath)
+    } catch (e: any) {
+      pushToast({ level: 'error', source: 'file', message: `复制路径失败：${e?.message ?? e}` })
+    }
+  }
+
+  async function applyCopyResult(
+    r: { ok: string[]; failed: { path: string; error: string }[] },
+    destParentRel: string,
+    failLabel: string,
+  ) {
+    if (r.ok.length) {
+      if (destParentRel && !expanded.value.has(destParentRel)) {
+        expanded.value = new Set([...expanded.value, destParentRel])
+      }
+      await loadDir(destParentRel)
+      selectedRelPath.value = r.ok[0]
+    }
+    if (r.failed.length) {
+      pushToast({ level: 'error', source: 'file', message: `${failLabel}：${r.failed[0].error}` })
+    }
+  }
+
+  /** 粘贴到 destParentRel（菜单上下文决定：dir=自身 / file=父 / blank=根）。
+   *  内部剪贴板优先，空则回退系统剪贴板路径；成功（有 ok）后清内部剪贴板。 */
+  async function pasteInto(destParentRel: string) {
+    const wd = workDir.value
+    if (!wd) return
+    let paths = clipboard.value?.paths ?? []
+    const op = clipboard.value?.op ?? 'copy'
+    if (!paths.length) {
+      paths = await FileClipRead().catch(() => [])
+      if (!paths.length) {
+        pushToast({ level: 'warn', source: 'file', message: '剪贴板中的源文件不存在或没有可粘贴的路径' })
+        return
+      }
+    }
+    try {
+      const r = await FileCopy(paths, wd, destParentRel, op === 'cut' ? 'move' : 'copy')
+      if (r.ok.length) clipboard.value = null
+      await applyCopyResult(r, destParentRel, '粘贴失败')
+    } catch (e: any) {
+      pushToast({ level: 'error', source: 'file', message: `粘贴失败：${e?.message ?? e}` })
+    }
+  }
+
+  /** 拖拽落点移动（安全校验在主进程 copyEntries，此处只透传结果） */
+  async function moveEntry(srcRel: string, destParentRel: string) {
+    const wd = workDir.value
+    if (!wd || !srcRel) return
+    const srcParent = parentOf(srcRel)
+    try {
+      const r = await FileCopy([absJoin(wd, srcRel)], wd, destParentRel, 'move')
+      if (r.ok.length) {
+        await loadDir(srcParent)
+      }
+      await applyCopyResult(r, destParentRel, '移动失败')
+    } catch (e: any) {
+      pushToast({ level: 'error', source: 'file', message: `移动失败：${e?.message ?? e}` })
+    }
+  }
+
+  /** 系统资源管理器中显示 */
+  async function revealEntry(relPath: string) {
+    const wd = workDir.value
+    if (!wd) return
+    try {
+      await FileReveal(wd, relPath)
+    } catch (e: any) {
+      pushToast({ level: 'error', source: 'file', message: `在资源管理器中显示失败：${e?.message ?? e}` })
+    }
+  }
+
+  /** 全部折叠（菜单「全部折叠」） */
+  function collapseAll() {
+    expanded.value = new Set()
+  }
+
+  /** 刷新根 + 所有已展开目录（工具条与菜单「刷新」共用） */
+  async function refreshAll() {
+    const dirs = new Set([''])
+    for (const d of expanded.value) dirs.add(d)
+    await Promise.all(Array.from(dirs).map((d) => loadDir(d).catch(() => {})))
   }
 
   // 外部变更：局部刷新树 + 处理打开文件的冲突
@@ -319,11 +450,13 @@ export const useFilesStore = defineStore('files', () => {
 
   return {
     workDir, currentSessionId, tree, expanded, openFiles, drafts, activeRelPath, collapsed, rootCreateRequest,
+    createAtRequest, selectedRelPath, clipboard, dragRel, dropTargetRel,
     splitOpen,
     diffRequest, activeView, openDiff, closeDiff, activateFile,
     setSession, forgetSession, loadDir, toggleExpand, openFile, openInSplit, closeFile, saveFile, reloadFile,
     setDraft, clearDraft,
     createEntry, renameEntry, deleteEntry,
+    select, entryIsDir, setClipboard, copyPath, pasteInto, moveEntry, revealEntry, collapseAll, refreshAll,
     cleanupWatcher: () => { fileChangedCleanup?.(); fileChangedCleanup = null },
   }
 })

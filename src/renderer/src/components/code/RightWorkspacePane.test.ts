@@ -23,6 +23,11 @@ vi.mock('../../composables/useElectron', () => ({
   FileUnwatch: vi.fn(() => Promise.resolve()),
   FileChanged: vi.fn(() => vi.fn()),
   GitChanged: vi.fn(() => vi.fn()),
+  FileCopy: vi.fn(() => Promise.resolve({ ok: [], failed: [] })),
+  FileReveal: vi.fn(() => Promise.resolve({ ok: true })),
+  FileClipWrite: vi.fn(() => Promise.resolve({ ok: true })),
+  FileClipRead: vi.fn(() => Promise.resolve([])),
+  ClipboardWrite: vi.fn(() => Promise.resolve()),
 }))
 // CodeView 深层会拉 Monaco 相关组件，整棵 stub 掉
 vi.mock('./CodeView.vue', () => ({

@@ -17,6 +17,11 @@ vi.mock('../../composables/useElectron', () => ({
   FileUnwatch: vi.fn(() => Promise.resolve()),
   FileChanged: vi.fn(() => vi.fn()),
   GitChanged: vi.fn(() => vi.fn()),
+  FileCopy: vi.fn(() => Promise.resolve({ ok: [], failed: [] })),
+  FileReveal: vi.fn(() => Promise.resolve({ ok: true })),
+  FileClipWrite: vi.fn(() => Promise.resolve({ ok: true })),
+  FileClipRead: vi.fn(() => Promise.resolve([])),
+  ClipboardWrite: vi.fn(() => Promise.resolve()),
 }))
 
 vi.mock('./FileTree.vue', () => ({ default: { name: 'FileTreeStub', template: '<div class="tree-stub" />' } }))
