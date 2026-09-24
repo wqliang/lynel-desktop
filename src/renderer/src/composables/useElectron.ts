@@ -151,6 +151,12 @@ export const FileDelete = (workDir: string, relPath: string) => api().fileDelete
 export const FileWatch = (workDir: string) => api().fileWatch(workDir);
 export const FileUnwatch = (workDir: string) => api().fileUnwatch(workDir);
 export const FileChanged = (cb: (e: { workDir: string; relPath: string }) => void) => EventsOn('file:changed', cb);
+export interface FileCopyResult { ok: string[]; failed: { path: string; error: string }[] }
+export const FileCopy = (srcPaths: string[], destWorkDir: string, destParentRel: string, mode: 'copy' | 'move') =>
+  api().fileCopy(srcPaths, destWorkDir, destParentRel, mode) as Promise<FileCopyResult>;
+export const FileReveal = (workDir: string, relPath: string) => api().fileReveal(workDir, relPath);
+export const FileClipWrite = (paths: string[]) => api().fileClipWrite(paths);
+export const FileClipRead = (): Promise<string[]> => api().fileClipRead();
 
 // 项目终端（每会话一个 shell）
 export const ShellEnsure = (sessionId: string, workDir: string, cols: number, rows: number) =>

@@ -1,7 +1,7 @@
 // 文件服务核心纯函数：忽略清单 / 二进制判定 / 目录列出 / 路径校验
 import fs from 'node:fs';
 import path from 'node:path';
-import { ipcMain } from 'electron';
+import { ipcMain, clipboard, shell } from 'electron';
 import { getBus } from './events.js';
 
 export const MAX_TEXT_SIZE = 1024 * 1024; // 1MB，超过视为大文件只读
@@ -163,6 +163,22 @@ export async function copyEntries(
   return { ok, failed };
 }
 
+/** Windows 剪贴板文件列表格式：UTF-16LE，每路径 \0 结尾、整体补 \0 */
+export function buildFileNameW(paths: string[]): Buffer {
+  const chunks = paths.map((p) => Buffer.from(p + '\0', 'utf16le'));
+  return Buffer.concat([...chunks, Buffer.from('\0', 'utf16le')]);
+}
+
+export function parseFileNameW(buf: Buffer): string[] {
+  if (buf.length < 2) return [];
+  return buf.toString('utf16le').split('\0').filter(Boolean);
+}
+
+/** 在系统资源管理器中显示并选中条目（show 注入便于测试） */
+export function revealEntry(workDir: string, relPath: string, show: (p: string) => void): void {
+  show(resolveEntry(workDir, relPath));
+}
+
 // —— 以下为文件服务 IPC + 目录监听 ——
 const watchers = new Map<string, fs.FSWatcher>();
 const watcherTimers = new Map<string, NodeJS.Timeout>();
@@ -202,6 +218,43 @@ export function registerFilesIpc(): void {
   ipcMain.handle('file:unwatch', async (_e, workDir: string) => {
     await stopWatch(workDir);
     return { ok: true };
+  });
+
+  ipcMain.handle('file:copy', async (_e, srcPaths: string[], destWorkDir: string, destParentRel: string, mode: 'copy' | 'move') =>
+    copyEntries(srcPaths, destWorkDir, destParentRel, mode));
+
+  ipcMain.handle('file:reveal', (_e, workDir: string, relPath: string) => {
+    revealEntry(workDir, relPath, (p) => shell.showItemInFolder(p));
+    return { ok: true };
+  });
+
+  // 复制/剪切时同步写系统剪贴板：先写 \n 拼接的路径文本，win32 再写 FileNameW。
+  // 顺序有讲究：Electron 每次 write* 独立打开剪贴板（EmptyClipboard 后写入），
+  // 后写者胜 —— FileNameW 放最后，资源管理器外部粘贴才可用；
+  // writeBuffer 抛错时 text 仍在，即 spec 的「回退拼接文本」
+  ipcMain.handle('file:clipWrite', (_e, paths: string[]) => {
+    const list = Array.isArray(paths) ? paths.filter((p) => typeof p === 'string' && p) : [];
+    if (!list.length) return { ok: true };
+    clipboard.writeText(list.join('\n'));
+    if (process.platform === 'win32') {
+      try { clipboard.writeBuffer('FileNameW', buildFileNameW(list)); } catch { /* text 兜底已写 */ }
+    }
+    return { ok: true };
+  });
+
+  // 读系统剪贴板路径：先 FileNameW 再 text 按行回退；过滤不存在的源，
+  // 渲染层粘贴前无需再发 IPC 校验
+  ipcMain.handle('file:clipRead', () => {
+    let list: string[] = [];
+    if (process.platform === 'win32') {
+      try { list = parseFileNameW(clipboard.readBuffer('FileNameW')); } catch { /* 回退 text */ }
+    }
+    if (!list.length) {
+      list = (clipboard.readText() || '').split(/\r?\n/)
+        .map((s) => s.trim().replace(/^"|"$/g, ''))
+        .filter(Boolean);
+    }
+    return list.filter((p) => { try { fs.statSync(p); return true; } catch { return false; } });
   });
 }
 

@@ -154,6 +154,11 @@ const api = {
     ipcRenderer.invoke('file:delete', workDir, relPath),
   fileWatch: (workDir: string) => ipcRenderer.invoke('file:watch', workDir),
   fileUnwatch: (workDir: string) => ipcRenderer.invoke('file:unwatch', workDir),
+  fileCopy: (srcPaths: string[], destWorkDir: string, destParentRel: string, mode: 'copy' | 'move') =>
+    ipcRenderer.invoke('file:copy', srcPaths, destWorkDir, destParentRel, mode),
+  fileReveal: (workDir: string, relPath: string) => ipcRenderer.invoke('file:reveal', workDir, relPath),
+  fileClipWrite: (paths: string[]) => ipcRenderer.invoke('file:clipWrite', paths),
+  fileClipRead: () => ipcRenderer.invoke('file:clipRead') as Promise<string[]>,
 
   shellEnsure: (sessionId: string, workDir: string, cols: number, rows: number) =>
     ipcRenderer.invoke('shell:ensure', sessionId, workDir, cols, rows),

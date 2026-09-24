@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { isIgnored, detectBinary, listDir, resolveEntry, readFileEntry, writeFileEntry, createEntry, renameEntry, deleteEntry, startWatch, stopWatch, MAX_TEXT_SIZE, uniqueDestName, copyEntries } from '../../src/main/files.js'
+import { isIgnored, detectBinary, listDir, resolveEntry, readFileEntry, writeFileEntry, createEntry, renameEntry, deleteEntry, startWatch, stopWatch, MAX_TEXT_SIZE, uniqueDestName, copyEntries, buildFileNameW, parseFileNameW, revealEntry } from '../../src/main/files.js'
 import { getBus } from '../../src/main/events.js'
 
 describe('isIgnored', () => {
@@ -313,5 +313,35 @@ describe('copyEntries', () => {
     // 源在根下、目标也是根 —— 同目录 copy 产生副本
     const r = await copyEntries([path.join(root, 'r.ts')], root, '', 'copy')
     expect(r.ok).toEqual(['r - 副本.ts'])
+  })
+})
+
+describe('FileNameW 编解码', () => {
+  it('往返一致（多路径）', () => {
+    const paths = ['G:/work/a.ts', 'G:/work/目录 b/c.ts']
+    expect(parseFileNameW(buildFileNameW(paths))).toEqual(paths)
+  })
+  it('单路径', () => {
+    expect(parseFileNameW(buildFileNameW(['D:/x.txt']))).toEqual(['D:/x.txt'])
+  })
+  it('空 buffer 返回空数组', () => {
+    expect(parseFileNameW(Buffer.alloc(0))).toEqual([])
+  })
+})
+
+describe('revealEntry', () => {
+  it('把 resolveEntry 结果交给 show', () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'lynel-reveal-'))
+    const show = vi.fn()
+    revealEntry(base, 'src/a.ts', show)
+    expect(show).toHaveBeenCalledWith(path.join(base, 'src', 'a.ts'))
+    fs.rmSync(base, { recursive: true, force: true })
+  })
+  it('越界路径直接抛错，不调用 show', () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'lynel-reveal-'))
+    const show = vi.fn()
+    expect(() => revealEntry(base, '../evil.ts', show)).toThrow(/越界/)
+    expect(show).not.toHaveBeenCalled()
+    fs.rmSync(base, { recursive: true, force: true })
   })
 })
