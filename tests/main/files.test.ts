@@ -338,12 +338,18 @@ describe('copyEntries', () => {
 })
 
 describe('FileNameW 编解码', () => {
-  it('往返一致（多路径）', () => {
+  // 归一化发生在 build 侧（正斜杠 → 反斜杠），parse 往返断言按归一化后的行为写
+  it('往返一致（多路径，build 侧归一化为反斜杠）', () => {
     const paths = ['G:/work/a.ts', 'G:/work/目录 b/c.ts']
-    expect(parseFileNameW(buildFileNameW(paths))).toEqual(paths)
+    expect(parseFileNameW(buildFileNameW(paths))).toEqual(['G:\\work\\a.ts', 'G:\\work\\目录 b\\c.ts'])
   })
   it('单路径', () => {
-    expect(parseFileNameW(buildFileNameW(['D:/x.txt']))).toEqual(['D:/x.txt'])
+    expect(parseFileNameW(buildFileNameW(['D:/x.txt']))).toEqual(['D:\\x.txt'])
+  })
+  it('混合斜杠路径编码后为纯反斜杠（CF_HDROP 惯例）', () => {
+    const buf = buildFileNameW(['G:/work/a.ts', 'D:\\x/y.txt'])
+    expect(parseFileNameW(buf)).toEqual(['G:\\work\\a.ts', 'D:\\x\\y.txt'])
+    expect(buf.toString('utf16le')).not.toContain('/')
   })
   it('空 buffer 返回空数组', () => {
     expect(parseFileNameW(Buffer.alloc(0))).toEqual([])

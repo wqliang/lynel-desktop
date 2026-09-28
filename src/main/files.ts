@@ -163,9 +163,10 @@ export async function copyEntries(
   return { ok, failed };
 }
 
-/** Windows 剪贴板文件列表格式：UTF-16LE，每路径 \0 结尾、整体补 \0 */
+/** Windows 剪贴板文件列表格式：UTF-16LE，每路径 \0 结尾、整体补 \0。
+ *  CF_HDROP/FileNameW 惯例是 Windows 反斜杠，编码前统一把正斜杠归一化（absJoin 产出的是正/混合斜杠）。 */
 export function buildFileNameW(paths: string[]): Buffer {
-  const chunks = paths.map((p) => Buffer.from(p + '\0', 'utf16le'));
+  const chunks = paths.map((p) => Buffer.from(p.replace(/\//g, '\\') + '\0', 'utf16le'));
   return Buffer.concat([...chunks, Buffer.from('\0', 'utf16le')]);
 }
 
