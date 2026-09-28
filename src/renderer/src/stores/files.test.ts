@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useFilesStore } from './files'
 import { pushToast } from '../composables/useToast'
-import { FileCopy, FileClipWrite, FileClipRead } from '../composables/useElectron'
+import { FileCopy, FileClipWrite, FileClipRead, FileChanged, FileListDir } from '../composables/useElectron'
 
 vi.mock('../composables/useToast', () => ({ pushToast: vi.fn() }))
 
@@ -193,22 +193,28 @@ describe('files store · 剪贴板动作', () => {
     expect(FileCopy).toHaveBeenCalledWith(['/repo/src/a.ts'], '/repo', 'dest', 'move')
   })
 
-  it('内部剪贴板空时回退 FileClipRead；都空则 toast 且不发 copy', async () => {
+  it('内部剪贴板空时回退 FileClipRead：两级皆空则 toast「剪贴板为空」且不发 copy IPC', async () => {
     vi.mocked(FileClipRead).mockResolvedValueOnce([])
     const store = useFilesStore()
     await store.setSession('s1', '/repo')
     await store.pasteInto('')
-    expect(FileCopy).not.toHaveBeenCalled()
-    expect(pushToast).toHaveBeenCalledWith(expect.objectContaining({ level: 'warn', source: 'file' }))
+    expect(FileClipRead).toHaveBeenCalledTimes(1) // 第二级确实回退读了系统剪贴板
+    expect(FileCopy).not.toHaveBeenCalled() // 两级皆空不发 file:copy
+    expect(pushToast).toHaveBeenCalledWith(expect.objectContaining({
+      level: 'warn', source: 'file', message: '剪贴板为空',
+    }))
   })
 
-  it('FileClipRead 回退成功：用读到的路径 copy', async () => {
+  it('内部为空时回退 FileClipRead 成功：用读到的外部路径 copy（外部粘贴入口）', async () => {
     vi.mocked(FileClipRead).mockResolvedValueOnce(['D:/x/y.ts'])
     vi.mocked(FileCopy).mockResolvedValueOnce({ ok: ['y.ts'], failed: [] })
     const store = useFilesStore()
     await store.setSession('s1', '/repo')
     await store.pasteInto('')
+    expect(FileClipRead).toHaveBeenCalledTimes(1)
     expect(FileCopy).toHaveBeenCalledWith(['D:/x/y.ts'], '/repo', '', 'copy')
+    // 外部粘贴成功后内部剪贴板本就是空的，清空是 no-op —— 不残留脏状态
+    expect(store.clipboard).toBe(null)
   })
 
   it('部分失败：toast error，成功的条目仍生效', async () => {
@@ -229,5 +235,58 @@ describe('files store · 剪贴板动作', () => {
     await store.moveEntry('src/a.ts', 'dest')
     expect(FileCopy).toHaveBeenCalledWith(['/repo/src/a.ts'], '/repo', 'dest', 'move')
     expect(store.selectedRelPath).toBe('dest/a.ts')
+  })
+})
+
+describe('files store · watcher 外部删除清选中', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    setActivePinia(createPinia())
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  /** 捕获 store 创建时注册的 file:changed 回调，供测试手动触发 */
+  function captureWatcher() {
+    const handlers: Array<(e: { workDir: string; relPath: string }) => void> = []
+    vi.mocked(FileChanged).mockImplementation((cb) => {
+      handlers.push(cb)
+      return vi.fn()
+    })
+    return handlers
+  }
+
+  it('watcher 事件刷新后被选中项已不存在（外部删除）→ 选中态被清空', async () => {
+    const handlers = captureWatcher()
+    vi.mocked(FileListDir)
+      .mockResolvedValueOnce([])                               // setSession 拉根
+      .mockResolvedValueOnce([{ name: 'a.ts', isDir: false }]) // 首次展开 src：a.ts 还在
+      .mockResolvedValueOnce([])                               // watcher 刷新：a.ts 已被外部删除
+    const store = useFilesStore() // store 创建时注册 watcher
+    await store.setSession('s1', '/repo')
+    await store.toggleExpand('src', true)
+    store.select('src/a.ts')
+    expect(store.selectedRelPath).toBe('src/a.ts')
+
+    handlers[0]({ workDir: '/repo', relPath: 'src/a.ts' })
+    await new Promise((r) => setTimeout(r, 0)) // 等 loadDir 与选中清理跑完
+    expect(store.selectedRelPath).toBe(null)
+  })
+
+  it('watcher 事件后条目仍在：选中态保持不动', async () => {
+    const handlers = captureWatcher()
+    vi.mocked(FileListDir)
+      .mockResolvedValueOnce([])                               // setSession 拉根
+      .mockResolvedValueOnce([{ name: 'a.ts', isDir: false }]) // 展开 src
+      .mockResolvedValueOnce([{ name: 'a.ts', isDir: false }]) // watcher 刷新：a.ts 仍在
+    const store = useFilesStore()
+    await store.setSession('s1', '/repo')
+    await store.toggleExpand('src', true)
+    store.select('src/a.ts')
+
+    handlers[0]({ workDir: '/repo', relPath: 'src/a.ts' })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(store.selectedRelPath).toBe('src/a.ts')
   })
 })

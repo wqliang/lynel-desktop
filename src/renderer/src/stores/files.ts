@@ -369,7 +369,10 @@ export const useFilesStore = defineStore('files', () => {
   }
 
   /** 粘贴到 destParentRel（菜单上下文决定：dir=自身 / file=父 / blank=根）。
-   *  内部剪贴板优先，空则回退系统剪贴板路径；成功（有 ok）后清内部剪贴板。 */
+   *  三级回退：① 内部剪贴板非空 → 用它；② 为空 → FileClipRead 读系统剪贴板
+   *  （主进程已过滤不存在的路径，外部源按现有逻辑处理）；③ 两级皆空 →
+   *  warn「剪贴板为空」，不发 IPC。成功（有 ok）后清内部剪贴板 ——
+   *  外部粘贴时内部本就为空，清空是 no-op，不会误清别的东西。 */
   async function pasteInto(destParentRel: string) {
     const wd = workDir.value
     if (!wd) return
@@ -377,10 +380,10 @@ export const useFilesStore = defineStore('files', () => {
     const op = clipboard.value?.op ?? 'copy'
     if (!paths.length) {
       paths = await FileClipRead().catch(() => [])
-      if (!paths.length) {
-        pushToast({ level: 'warn', source: 'file', message: '剪贴板中的源文件不存在或没有可粘贴的路径' })
-        return
-      }
+    }
+    if (!paths.length) {
+      pushToast({ level: 'warn', source: 'file', message: '剪贴板为空' })
+      return
     }
     try {
       const r = await FileCopy(paths, wd, destParentRel, op === 'cut' ? 'move' : 'copy')
@@ -432,13 +435,27 @@ export const useFilesStore = defineStore('files', () => {
 
   // 外部变更：局部刷新树 + 处理打开文件的冲突
   let fileChangedCleanup: (() => void) | null = null
+
+  /** 刷新后选中项已不在树里（外部删除）→ 清空选中（spec §1：watcher 删除 → 清空若是被删项）。
+   *  按选中项的父目录查 tree[parent]；根级选中查 tree['']。父目录未加载（查不到）时不清，
+   *  避免拿不完整的数据误清。不清会让 +/F2/Delete 指向已不存在的幽灵路径。 */
+  function clearSelectionIfGone() {
+    const sel = selectedRelPath.value
+    if (!sel) return
+    const parent = parentOf(sel)
+    const name = sel.slice(parent ? parent.length + 1 : 0)
+    const entries = tree.value[parent]
+    if (entries && !entries.some((x) => x.name === name)) selectedRelPath.value = null
+  }
+
   function initWatcher() {
     fileChangedCleanup?.()
     fileChangedCleanup = FileChanged((e: { workDir: string; relPath: string }) => {
       if (e.workDir !== workDir.value) return
       const parts = e.relPath.split('/')
       const parent = parts.slice(0, -1).join('/')
-      if (expanded.value.has(parent)) void loadDir(parent).catch(() => {})
+      const refresh = expanded.value.has(parent) ? loadDir(parent).catch(() => {}) : Promise.resolve()
+      void refresh.then(clearSelectionIfGone) // 刷新树后再查，拿的是最新条目列表
       const f = openFiles.value.find((o) => o.relPath === e.relPath)
       if (f && !f.dirty) void reloadFile(e.relPath).catch(() => {})
       else if (f && f.dirty) f.externalChanged = true

@@ -340,7 +340,6 @@ watch(
       :target="menu.target"
       :x="menu.x"
       :y="menu.y"
-      :show-paste="!!store.clipboard"
       @action="onMenuAction"
       @close="closeMenu"
     />

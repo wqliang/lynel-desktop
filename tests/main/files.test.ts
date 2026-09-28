@@ -302,6 +302,27 @@ describe('copyEntries', () => {
     expect(fs.existsSync(path.join(lib, 'sub'))).toBe(true)
   })
 
+  it('move 目标父目录=源自身：拒绝且源未被动', async () => {
+    const a = path.join(root, 'a'); fs.mkdirSync(a)
+    fs.writeFileSync(path.join(a, 't.ts'), 'x')
+    // 源是目录 a，目标父目录也是 a —— 等于把 a 移进 a 自己
+    const r = await copyEntries([a], root, 'a', 'move')
+    expect(r.ok).toEqual([])
+    expect(r.failed[0].error).toContain('目标不能是源自身或其子目录')
+    expect(fs.readFileSync(path.join(a, 't.ts'), 'utf8')).toBe('x') // 源完好
+    expect(fs.readdirSync(a)).toEqual(['t.ts']) // 没有产生任何新条目
+  })
+
+  it('move 目标父目录在源之下（a/ → a/b/）：拒绝且源未被动', async () => {
+    const a = path.join(root, 'a'); fs.mkdirSync(a)
+    fs.writeFileSync(path.join(a, 't.ts'), 'x')
+    const r = await copyEntries([a], root, 'a/b', 'move')
+    expect(r.ok).toEqual([])
+    expect(r.failed[0].error).toContain('目标不能是源自身或其子目录')
+    expect(fs.existsSync(path.join(a, 'b'))).toBe(false) // 目标未创建
+    expect(fs.readFileSync(path.join(a, 't.ts'), 'utf8')).toBe('x') // 源完好
+  })
+
   it('源不存在进 failed，错误文案含「源文件不存在」', async () => {
     const r = await copyEntries([path.join(root, 'ghost.ts')], root, '', 'copy')
     expect(r.ok).toEqual([])

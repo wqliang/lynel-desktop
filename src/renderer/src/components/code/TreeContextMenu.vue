@@ -17,8 +17,6 @@ const props = defineProps<{
   target: MenuTarget
   x: number
   y: number
-  /** 内部剪贴板非空时显示「粘贴」（空则隐藏而非 disabled） */
-  showPaste: boolean
 }>()
 const emit = defineEmits<{
   (e: 'action', action: string, target: MenuTarget): void
@@ -36,7 +34,9 @@ const nodes = computed<MenuNode[]>(() => {
     sep,
     { kind: 'item', action: 'copy', label: '复制', icon: 'copy' },
     { kind: 'item', action: 'cut', label: '剪切', icon: 'scissors' },
-    ...(props.showPaste ? [{ kind: 'item', action: 'paste', label: '粘贴', icon: 'clipboard-paste' } as MenuNode] : []),
+    // 粘贴始终渲染（不看剪贴板状态）：外部剪贴板（资源管理器复制）也要有入口，
+    // 空剪贴板由 pasteInto 三级回退兜底 toast
+    { kind: 'item', action: 'paste', label: '粘贴', icon: 'clipboard-paste' },
     sep,
     { kind: 'item', action: 'rename', label: '重命名', icon: 'pencil' },
     { kind: 'item', action: 'reveal', label: '在资源管理器中显示', icon: 'eye' },
