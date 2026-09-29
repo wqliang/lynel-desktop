@@ -59,7 +59,8 @@
       <RunStreamView
         v-if="activeRun"
         :run="activeRun"
-        :events="events"
+        :items="items"
+        :epoch="epoch"
         :is-latest="isLatest"
         @cancel="$emit('cancel', activeRun.id)"
         @latest="$emit('view-latest')"
@@ -84,7 +85,7 @@ import RunHistoryList from './RunHistoryList.vue'
 import { formatNextRun, taskCostHint } from '../../utils/tasks'
 import { formatRelTime } from '../../utils/time'
 import { statusLabel } from '../../utils/taskStatus'
-import type { EventEnvelope, RunDto, TaskDto } from '../../types/tasks'
+import type { RunDto, StreamItem, TaskDto } from '../../types/tasks'
 
 const props = defineProps<{
   task: TaskDto
@@ -92,7 +93,9 @@ const props = defineProps<{
   hasMore: boolean
   activeRun: RunDto | null
   activeRunId: string | null
-  events: EventEnvelope[]
+  items: StreamItem[]
+  /** 历史加载代数：透传给 RunStreamView，播放队列据此区分历史/实时 */
+  epoch: number
   isLatest: boolean
   /** 已加载的运行条数；还有更早的分页时带一个 + 后缀，避免谎报总数 */
   runBadge: string

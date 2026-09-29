@@ -1,11 +1,9 @@
-<!-- 运行流水：把一次 run 的完整 stream-json 事件流重放成人能读的线性视图。
-     结构：运行头（状态 + 指标 chips）→ 事件体。**没有那四个过滤开关**，所有事件一律渲染。
-     - 工具调用折叠成一行 StepCard（Edit / Write 例外，diff 是任务产出）
-     - 思考 / 诊断输出默认折叠（空诊断输出直接给一行静态文案，不留展开后什么都没有的折叠块）
-     - **正文与终局结果永不自动折叠**：Markdown 默认 >800 字符 / >18 行会折成 details，
-       那会把「结果」藏起来（用户报过的「> show 29 lines」），故传 NO_FOLD 关掉
-     - running 时底部自动跟随；用户手动上滚即停止跟随，滚回底部恢复
-     事件折叠逻辑在 utils/tasks.ts 的 flattenRunEvents，本组件只负责渲染与开关。 -->
+<!-- 运行流水：把一次 run 的事件流重放成 agent 化的时间轴视图。
+     - store 增量 flatten（streamItems），本组件不再全量 flatten
+     - useRunPlayback 播放队列：历史直接全显，实时事件逐条出场（正文打字机、其余 80ms 间隔滑入）
+     - 积压 >5 条或点「立即显示」快进；终态先快进再通知
+     - 工具调用 / 思考 / 诊断输出默认折叠（无 Edit/Write 例外）
+     - 正文与终局结果永不自动折叠（NO_FOLD）；进入页面默认贴底，running 时始终跟随在底部 -->
 <template>
   <div class="stream">
     <!-- 运行头：哪一次（时间 + 触发方式）+ 状态 + 指标 chips。历史里点进旧 run 时给「回到最新」。 -->
@@ -18,16 +16,32 @@
       <span class="sp" />
       <span class="chip">{{ toolCount }} 个工具调用{{ errorCount ? ` · ${errorCount} 个失败` : '' }}</span>
       <span v-for="c in barChips" :key="c" class="chip">{{ c }}</span>
+      <button v-if="backlog > 0" class="btn" title="事件积压，立即显示全部" @click="fastForward">
+        立即显示 {{ backlog }}
+      </button>
       <button v-if="run.status === 'running'" class="btn" @click="$emit('cancel')">取消</button>
       <span v-else-if="!isLatest" class="link" @click="$emit('latest')">回到最新</span>
     </div>
 
-    <div ref="bodyEl" class="sbody" @scroll="onScroll">
+    <div ref="bodyEl" class="sbody" :class="{ 'empty-body': shown.length === 0 }" @scroll="onScroll">
       <!-- key 里必须带 run.id：RunStreamView 换 run 时是同一个组件实例，只按 at 做 key 会让
-           Vue 复用同下标的 ToolStepCard 实例，ToolStepCard 的 open 初值（Edit/Write 才展开）
+           Vue 复用同下标的 ToolStepCard 实例，ToolStepCard 的 open 展开态（默认全折叠）
            就再也不会对新 run 的同下标元素重新求值 —— 折叠态会跨 run 串。
            at 这一段不能去掉：折叠态是按「在未过滤列表里的下标」记的稳定标识。 -->
-      <template v-for="item in items" :key="run.id + ':' + item.at">
+      <template v-for="item in shown" :key="run.id + ':' + item.at">
+        <!-- 时间轴壳：左连线 + 按类型着色的节点（版式 C）。分支的 v-if / v-else-if 链
+             必须保持连续，所以全部分支共同包进这一个父节点，内容不改。 -->
+        <div
+          class="tl-item"
+          :class="[
+            'k-' + item.kind,
+            {
+              'tl-enter': fresh.has(item.at),
+              'tl-last': item.at === shown.length - 1,
+              'is-err': item.kind === 'result' && item.summary.isError,
+            },
+          ]"
+        >
         <div v-if="item.kind === 'init'" class="meta-line">
           <span>Claude Code {{ item.version }}</span>
           <span class="dim">·</span>
@@ -53,13 +67,15 @@
         </div>
 
         <!-- 正文永不自动折叠：任务流水就是给人读结果的，「> show N lines」把结果藏起来等于没给 -->
-        <Markdown
-          v-else-if="item.kind === 'text'"
-          :text="item.text"
-          class="md-text"
-          :max-len="NO_FOLD"
-          :max-lines="NO_FOLD"
-        />
+        <div v-else-if="item.kind === 'text'" class="text-line">
+          <Markdown
+            :text="item.text"
+            class="md-text"
+            :max-len="NO_FOLD"
+            :max-lines="NO_FOLD"
+          />
+          <Icon v-if="typing && typing.at === item.at" name="loader" :size="12" class="spin" />
+        </div>
 
         <!-- 子代理（parent_tool_use_id 非 null → StreamItem.subagent）缩进成一组。
              不加标题：StreamItem 只带布尔标志、没有子代理类型，任何名字都是编造的。
@@ -102,10 +118,10 @@
             <Markdown :text="item.summary.resultText" :max-len="NO_FOLD" :max-lines="NO_FOLD" />
           </div>
         </div>
+        </div>
       </template>
 
-      <div v-if="run.status === 'running'" class="follow-caret"><span class="caret" /></div>
-      <div v-if="items.length === 0" class="empty">这次运行还没有事件</div>
+      <div v-if="run.status === 'running'" class="follow-caret"><Icon name="loader" :size="12" class="spin" /></div>
     </div>
   </div>
 </template>
@@ -115,12 +131,17 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import Icon from '../Icon.vue'
 import Markdown from '../trace/Markdown.vue'
 import ToolStepCard from './ToolStepCard.vue'
-import { flattenRunEvents, formatDuration } from '../../utils/tasks'
-import type { EventEnvelope, RunDto, StreamItem } from '../../types/tasks'
+import { formatDuration } from '../../utils/tasks'
+import { isNearBottom } from '../../utils/playback'
+import { useRunPlayback } from '../../composables/useRunPlayback'
+import type { RunDto, StreamItem } from '../../types/tasks'
 
 const props = defineProps<{
   run: RunDto
-  events: EventEnvelope[]
+  /** 已 flatten 的线性条目（store 增量产出）；原始 events 不再下传 */
+  items: StreamItem[]
+  /** 历史加载代数：切换时播放队列把当前内容当历史直接全量显示 */
+  epoch: number
   /** 当前展示的就是最近一次运行（false 时给「回到最新」入口） */
   isLatest?: boolean
 }>()
@@ -131,20 +152,29 @@ const expanded = ref<Set<number>>(new Set())
 const bodyEl = ref<HTMLElement | null>(null)
 let following = true
 
-const all = computed(() => flattenRunEvents(props.events))
+const items = computed(() => props.items)
+const epoch = computed(() => props.epoch)
+const pb = useRunPlayback(items, epoch)
+const { visibleCount, typing, backlog, fastForward, fresh } = pb
 
 /** 传给 Markdown 的「永不折叠」阈值（它默认 >800 字符 / >18 行就折成 details） */
 const NO_FOLD = Number.MAX_SAFE_INTEGER
 
-/** 折叠态按「在 all 里的下标」记 —— at 随事件追加只增不改，是稳定标识。
- *  全部事件一律渲染，不再有「思考 / 工具入参 / 工具输出 / 仅错误」四个过滤开关。 */
-const items = computed<(StreamItem & { at: number })[]>(() =>
-  all.value.map((item, at) => ({ ...item, at })),
-)
+/** 实际渲染的条目：slice 到 visibleCount；打字机进行中的 text 只取前 chars 个字符。
+ *  折叠态仍按下标记（at）—— 下标随事件追加只增不改，是稳定标识。 */
+const shown = computed<(StreamItem & { at: number })[]>(() => {
+  const list = items.value.slice(0, visibleCount.value)
+  const t = typing.value
+  if (t !== null && t.at < list.length) {
+    const it = list[t.at]
+    if (it.kind === 'text') list[t.at] = { ...it, text: it.text.slice(0, t.chars) }
+  }
+  return list.map((it, at) => ({ ...it, at }))
+})
 
-const toolCount = computed(() => all.value.filter((i) => i.kind === 'tool').length)
+const toolCount = computed(() => items.value.filter((i) => i.kind === 'tool').length)
 const errorCount = computed(
-  () => all.value.filter((i) => i.kind === 'tool' && i.status === 'error').length,
+  () => items.value.filter((i) => i.kind === 'tool' && i.status === 'error').length,
 )
 
 const isBad = computed(() => ['error', 'timeout', 'interrupted'].includes(props.run.status))
@@ -223,13 +253,13 @@ function usageChips(usage: Record<string, number>): string {
 async function scrollToBottom() {
   await nextTick()
   const el = bodyEl.value
-  if (el) el.scrollTop = el.scrollHeight
+  if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
 }
 
 function onScroll() {
   const el = bodyEl.value
   if (!el) return
-  following = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+  following = isNearBottom(el.scrollHeight, el.scrollTop, el.clientHeight)
 }
 
 /** 换 run 要重置视图态：展开态的下标是随 run 变的，跟着跨 run 会串到别的块上。 */
@@ -238,19 +268,30 @@ watch(
   () => {
     expanded.value = new Set()
     now.value = Date.now()
-    // 正在跑的 run 跟到底（看最新）；已结束的历史 run 从顶部开始读
-    following = props.run.status === 'running'
-    if (following) void scrollToBottom()
+    // 进入页面默认贴底看最新（历史 run 也一样，用户拍板），上滚后由 onScroll 接管
+    following = true
+    void scrollToBottom()
   },
   { immediate: true },
 )
 
 watch(() => props.run.status, syncTicker, { immediate: true })
 
+/** 终态：先把播放队列快进到最新，再走 toast / 托盘通知（spec §6 通知前先快进） */
 watch(
-  () => props.events.length,
+  () => props.run.status,
+  (s) => {
+    if (s !== 'running' && s !== 'queued') fastForward()
+  },
+  { immediate: true },
+)
+
+/** 出新条目 / 打字机推进：running 时始终拉回底部（用户拍板「执行中始终在最下面」，
+   上滚也强制跟随）；非 running（历史回放、终态）仍贴底才跟随，由 onScroll 维护。 */
+watch(
+  [visibleCount, () => typing.value?.chars],
   () => {
-    if (!following) return
+    if (!following && props.run.status !== 'running') return
     void scrollToBottom()
   },
 )
@@ -261,8 +302,14 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.stream { display: flex; flex-direction: column; background: var(--bg-primary); }
+/* height:100%（不是 min-height）：内容再长也封在本组件内，滚动条归 .sbody；
+   放回 .dbody 的话 scrollTo / onScroll 全部空转（见 .sbody 注释）。空态同样撑满居中（spec §4）。 */
+.stream {
+  display: flex; flex-direction: column; background: var(--bg-primary);
+  height: 100%;
+}
 .runhead {
+  flex: none;
   padding: 11px 20px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   font-size: var(--fs-caption); border-bottom: 1px solid var(--border);
 }
@@ -279,7 +326,8 @@ onBeforeUnmount(() => {
 
 /* 事件体：自身带滚动条，底部自动跟随才有落点（外层 .dbody 也是滚动容器，
    不封住高度的话滚动条归外层，scrollTop 赋值无效、onScroll 也永远不触发）。 */
-.sbody { padding: 16px 20px 26px; }
+.sbody { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px 26px; }
+.sbody.empty-body { flex: 1; display: flex; align-items: center; justify-content: center; }
 
 .meta-line {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -301,6 +349,8 @@ onBeforeUnmount(() => {
 .fold.readonly { cursor: default; }
 .fold.readonly:hover { color: var(--text-secondary); }
 .md-text { font-size: var(--fs-body-sm); margin: 10px 0 14px; }
+/* 打字机进行中的正文：块级容器 + 行尾光标 */
+.text-line { position: relative; }
 
 .io {
   background: var(--bg-input); border: 1px solid var(--border);
@@ -337,15 +387,76 @@ onBeforeUnmount(() => {
 }
 
 .follow-caret { padding: 2px 0; }
-.caret {
-  display: inline-block; width: 7px; height: 14px;
-  background: var(--accent); vertical-align: -2px; margin-left: 2px;
+/* 打字机 / 跟随尾部用转圈菊花（Loader2），不用闪烁光标——与 Claude 的思考指示一致 */
+.spin {
+  vertical-align: -2px; margin-left: 2px;
+  color: var(--accent);
+  animation: task-spin 0.8s linear infinite;
 }
-.empty { padding: 18px 12px; text-align: center; color: var(--text-tertiary); }
+@keyframes task-spin { to { transform: rotate(360deg); } }
 
 .st-done { color: var(--status-success); }
 .st-error, .st-timeout { color: var(--status-error); }
 .st-running { color: var(--accent); }
 .st-queued, .st-skipped, .st-interrupted { color: var(--text-tertiary); }
 
+/* —— 时间轴（版式 C）：左连线 + 按类型着色的节点 —— */
+.tl-item {
+  position: relative;
+  padding-left: 22px;
+  padding-bottom: 14px;
+  border-left: 1px solid var(--border);
+  margin-left: 4px;
+}
+.tl-item::before {
+  content: '';
+  position: absolute;
+  left: -5px;
+  top: 3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--node, var(--text-tertiary));
+  box-shadow: 0 0 0 3px var(--bg-primary);
+}
+/* 最后一项不留悬空连接线 */
+.tl-item.tl-last { border-left-color: transparent; }
+
+.k-init, .k-hook { --node: var(--text-tertiary); }
+.k-thinking { --node: var(--status-thinking); }
+.k-text { --node: var(--accent); }
+.k-tool { --node: var(--status-warn); }
+.k-stderr { --node: var(--status-error); }
+.k-result { --node: var(--status-success); }
+.k-result.is-err { --node: var(--status-error); }
+
+/* 节奏收紧：条目间距由 tl-item 的 padding-bottom 承担，内部不再叠加旧外边距 */
+.tl-item .md-text { margin: 2px 0 0; }
+.tl-item .res { margin-top: 8px; }
+.tl-item .hooked { margin-bottom: 0; }
+
+/* —— 动效（spec §5）：全部走 CSS，reduced-motion 下照 spinner 先例豁免 —— */
+
+/* 新事件行滑入：下方位移 10px + 淡入 */
+@keyframes task-slide {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+.tl-item.tl-enter { animation: task-slide .35s ease both; }
+
+/* 运行中状态呼吸点：runhead 的 running pill 做 box-shadow 扩散脉冲 */
+@keyframes task-pulse {
+  0% { box-shadow: 0 0 0 0 var(--accent-soft-border); }
+  70% { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.runhead .pill.running { animation: task-pulse 1.4s ease-out infinite; }
+
+/* reset.css 在系统「减少动态效果」时会把所有动画压成 0.01ms/1 次，
+   流水出场、运行呼吸与转圈菊花都是状态反馈动画，仍需保持（照 NewSessionDialog spinner 豁免先例） */
+@media (prefers-reduced-motion: reduce) {
+  .tl-item.tl-enter { animation: task-slide .35s ease both !important; }
+  .runhead .pill.running { animation: task-pulse 1.4s ease-out infinite !important; }
+  .spin { animation: task-spin 0.8s linear infinite !important; }
+}
 </style>

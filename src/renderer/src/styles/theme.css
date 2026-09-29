@@ -36,6 +36,8 @@
   --status-error-soft: rgba(255,59,48,0.12);
   --status-warn-bg: rgba(245, 158, 11, 0.12);
   --status-warn-border: rgba(245, 158, 11, 0.35);
+  /* 思考节点（运行流水时间轴）：紫 */
+  --status-thinking: #BF5AF2;
 
   --border: rgba(0,0,0,0.08);
   --border-strong: rgba(0,0,0,0.12);
@@ -175,6 +177,7 @@
   --status-error-soft: rgba(255,69,58,0.16);
   --status-warn-bg: rgba(255, 214, 10, 0.16);
   --status-warn-border: rgba(255, 214, 10, 0.45);
+  --status-thinking: #BF5AF2;
 
   --border: rgba(255,255,255,0.12);
   --border-strong: rgba(255,255,255,0.20);

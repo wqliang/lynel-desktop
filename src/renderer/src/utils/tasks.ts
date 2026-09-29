@@ -79,12 +79,16 @@ function editDelta(input: Record<string, unknown>): { add: number; del: number }
 
 /** 末尾连续的一串 text 条目的正文（从后往前走，遇到非 text 就停）。
  *  result.result 按定义就是「最后一条 assistant 消息的文本」，而那条消息在流里已经作为
- *  text 条目渲染过了 —— 直接再渲染一遍就是同一段话出现两次。 */
+ *  text 条目渲染过了 —— 直接再渲染一遍就是同一段话出现两次。
+ *  stderr 是带外错误输出、不构成那段话的一部分：扫描时跳过它继续向前，但自身不参与拼接；
+ *  其余类型（tool / thinking / result 等）仍然立即打断。 */
 function trailingTextRun(out: StreamItem[]): string {
   let i = out.length - 1;
   let text = '';
-  while (i >= 0 && out[i].kind === 'text') {
-    text = (out[i] as Extract<StreamItem, { kind: 'text' }>).text + text;
+  while (i >= 0 && (out[i].kind === 'text' || out[i].kind === 'stderr')) {
+    if (out[i].kind === 'text') {
+      text = (out[i] as Extract<StreamItem, { kind: 'text' }>).text + text;
+    }
     i -= 1;
   }
   return text;
@@ -96,97 +100,112 @@ function squash(text: string): string {
   return text.replace(/\s+/g, '');
 }
 
-export function flattenRunEvents(events: NormalizedEventDto[] | EventEnvelope[]): StreamItem[] {
-  const list: NormalizedEventDto[] = (events as unknown[]).map((e) =>
-    e && typeof e === 'object' && 'event' in (e as object)
-      ? (e as EventEnvelope).event
-      : (e as NormalizedEventDto),
-  );
+/** 增量 flatten 状态机：push 只处理新到的事件，内部 out / toolIndex 跨批次保留。
+ *  —— tool_result 回填、result 判重都依赖历史状态，闭包必须一直活着。 */
+export interface StreamFlattener {
+  /** 追加一批事件，返回**整条**线性视图的浅拷贝（回填会换掉早前槽位，整体替换才能触发渲染）。 */
+  push(events: NormalizedEventDto[] | EventEnvelope[]): StreamItem[];
+}
 
+export function createStreamFlattener(): StreamFlattener {
   const out: StreamItem[] = [];
   /** toolUseId → 在 out 里的下标，用于回填 tool_result */
   const toolIndex = new Map<string, number>();
 
-  for (const ev of list) {
-    switch (ev.type) {
-      case 'system': {
-        if (ev.subtype === 'init' && ev.init) {
-          out.push({
-            kind: 'init',
-            model: ev.init.model,
-            cwd: ev.init.cwd,
-            toolCount: ev.init.toolCount,
-            version: ev.init.claudeCodeVersion,
-            failedMcpServers: ev.init.failedMcpServers,
-          });
-        } else if (ev.hook) {
-          out.push({ kind: 'hook', name: ev.hook.name, ok: ev.hook.ok });
-        }
-        break;
-      }
-      case 'assistant': {
-        // C1：同一 message.id 的多个 block 本来就分散在多行里，按到达顺序展开即可；
-        // 空 thinking 已在主进程过滤，这里再兜一层。
-        for (const b of (ev.blocks ?? []) as NormalizedBlockDto[]) {
-          if (b.type === 'thinking') {
-            if (b.text) out.push({ kind: 'thinking', text: b.text });
-          } else if (b.type === 'text') {
-            if (b.text) out.push({ kind: 'text', text: b.text });
-          } else {
-            const delta = b.name === 'Edit' || b.name === 'Write' ? editDelta(b.input) : undefined;
-            const item: StreamItem = {
-              kind: 'tool',
-              id: b.id,
-              name: b.name,
-              summary: toolSummary(b.name, b.input),
-              status: 'running',
-              input: b.input,
-              subagent: ev.parentToolUseId != null,
-              ...(delta ? { delta } : {}),
-            };
-            toolIndex.set(b.id, out.length);
-            out.push(item);
+  function push(events: NormalizedEventDto[] | EventEnvelope[]): StreamItem[] {
+    const list: NormalizedEventDto[] = (events as unknown[]).map((e) =>
+      e && typeof e === 'object' && 'event' in (e as object)
+        ? (e as EventEnvelope).event
+        : (e as NormalizedEventDto),
+    );
+
+    for (const ev of list) {
+      switch (ev.type) {
+        case 'system': {
+          if (ev.subtype === 'init' && ev.init) {
+            out.push({
+              kind: 'init',
+              model: ev.init.model,
+              cwd: ev.init.cwd,
+              toolCount: ev.init.toolCount,
+              version: ev.init.claudeCodeVersion,
+              failedMcpServers: ev.init.failedMcpServers,
+            });
+          } else if (ev.hook) {
+            out.push({ kind: 'hook', name: ev.hook.name, ok: ev.hook.ok });
           }
-        }
-        break;
-      }
-      case 'user': {
-        const tr = ev.toolResult;
-        if (!tr) break;
-        const at = toolIndex.get(tr.toolUseId);
-        if (at === undefined) {
-          // 配对不上的 tool_result 仍然展示，不能静默丢
-          out.push({ kind: 'text', text: tr.content });
           break;
         }
-        const current = out[at] as Extract<StreamItem, { kind: 'tool' }>;
-        out[at] = {
-          ...current,
-          status: tr.isError ? 'error' : 'ok',
-          output: tr.content,
-        };
-        break;
+        case 'assistant': {
+          // C1：同一 message.id 的多个 block 本来就分散在多行里，按到达顺序展开即可；
+          // 空 thinking 已在主进程过滤，这里再兜一层。
+          for (const b of (ev.blocks ?? []) as NormalizedBlockDto[]) {
+            if (b.type === 'thinking') {
+              if (b.text) out.push({ kind: 'thinking', text: b.text });
+            } else if (b.type === 'text') {
+              if (b.text) out.push({ kind: 'text', text: b.text });
+            } else {
+              const delta = b.name === 'Edit' || b.name === 'Write' ? editDelta(b.input) : undefined;
+              const item: StreamItem = {
+                kind: 'tool',
+                id: b.id,
+                name: b.name,
+                summary: toolSummary(b.name, b.input),
+                status: 'running',
+                input: b.input,
+                subagent: ev.parentToolUseId != null,
+                ...(delta ? { delta } : {}),
+              };
+              toolIndex.set(b.id, out.length);
+              out.push(item);
+            }
+          }
+          break;
+        }
+        case 'user': {
+          const tr = ev.toolResult;
+          if (!tr) break;
+          const at = toolIndex.get(tr.toolUseId);
+          if (at === undefined) {
+            // 配对不上的 tool_result 仍然展示，不能静默丢
+            out.push({ kind: 'text', text: tr.content });
+            break;
+          }
+          const current = out[at] as Extract<StreamItem, { kind: 'tool' }>;
+          out[at] = {
+            ...current,
+            status: tr.isError ? 'error' : 'ok',
+            output: tr.content,
+          };
+          break;
+        }
+        case 'stderr':
+          out.push({ kind: 'stderr', text: ev.text ?? '' });
+          break;
+        case 'result': {
+          if (!ev.result) break;
+          const body = squash(ev.result.resultText);
+          out.push({
+            kind: 'result',
+            summary: ev.result,
+            // 内容为空时不判重（否则「都为空」会被当成重复，虽然渲染层对空文本本来也不显示正文）
+            textRepeatsAbove: body !== '' && body === squash(trailingTextRun(out)),
+          });
+          break;
+        }
+        default:
+          break;
       }
-      case 'stderr':
-        out.push({ kind: 'stderr', text: ev.text ?? '' });
-        break;
-      case 'result': {
-        if (!ev.result) break;
-        const body = squash(ev.result.resultText);
-        out.push({
-          kind: 'result',
-          summary: ev.result,
-          // 内容为空时不判重（否则「都为空」会被当成重复，虽然渲染层对空文本本来也不显示正文）
-          textRepeatsAbove: body !== '' && body === squash(trailingTextRun(out)),
-        });
-        break;
-      }
-      default:
-        break;
     }
+
+    return [...out];
   }
 
-  return out;
+  return { push };
+}
+
+export function flattenRunEvents(events: NormalizedEventDto[] | EventEnvelope[]): StreamItem[] {
+  return createStreamFlattener().push(events);
 }
 
 /** 详情摘要条的「均价」chip：取最近一次运行的单价，没有就整块不显示（不写 $0）。 */

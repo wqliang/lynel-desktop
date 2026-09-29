@@ -19,7 +19,8 @@
       :has-more="store.runsHasMore"
       :active-run="store.activeRun"
       :active-run-id="store.activeRunId"
-      :events="store.events"
+      :items="store.streamItems"
+      :epoch="store.streamEpoch"
       :is-latest="isLatest"
       :run-badge="runBadge"
       @edit="openForm('edit', $event)"
@@ -147,10 +148,18 @@ function startResize(e: MouseEvent) {
 
 <style scoped>
 .tasks-pane { flex: 1; min-height: 0; display: flex; height: 100%; }
+/* 「还没有任务」始终在右栏正中，随窗体尺寸跟随（spec §4）。
+   .blank 的 height:100% 在居中容器里会撑满，覆盖为 auto 让内容块自然居中。 */
 .empty-detail {
   flex: 1;
   min-width: 0;
   display: flex;
+  justify-content: center;
+  align-items: center;
   background: var(--bg-primary);
+}
+.empty-detail .blank {
+  height: auto;
+  min-height: min(300px, 100%);
 }
 </style>

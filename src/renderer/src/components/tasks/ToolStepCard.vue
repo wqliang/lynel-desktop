@@ -1,5 +1,5 @@
-<!-- 单条工具调用的 StepCard：默认折叠成一行，靠 tname + summ 辨认「这步在干嘛」。
-     Edit / Write 的 diff 是任务的核心产出 → 默认展开。
+<!-- 单条工具调用的 StepCard：全部默认折叠成一行，靠 tname + summ 辨认「这步在干嘛」。
+     Edit / Write 也默认折叠（无例外），点开后仍按 diff 渲染输出。
      左侧竖条按 tool_use.id 的色相着色（useIdHue），同一 id 的卡片颜色一致。 -->
 <template>
   <div
@@ -19,11 +19,15 @@
         <Icon :name="statusIcon" :size="12" />{{ statusLabel }}
       </span>
     </div>
-    <div v-if="open" class="open">
-      <div class="io"><pre>{{ inputText }}</pre></div>
-      <div v-if="item.output !== undefined" class="io">
-        <pre v-if="isDiff" v-html="diffHtml" />
-        <pre v-else>{{ item.output }}</pre>
+    <div class="open" :class="{ on: open }">
+      <div class="open-in">
+        <div class="open-pad">
+          <div class="io"><pre>{{ inputText }}</pre></div>
+          <div v-if="item.output !== undefined" class="io">
+            <pre v-if="isDiff" v-html="diffHtml" />
+            <pre v-else>{{ item.output }}</pre>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -44,9 +48,9 @@ const STATUS: Record<string, { icon: string; label: string }> = {
   running: { icon: 'loader', label: '运行中' },
 }
 
-/** Edit / Write 的 diff 是任务的核心产出 → 默认展开 */
+/** 全部工具默认折叠 —— 无 Edit/Write 例外（spec §2 决策 A），diff 点开照常渲染 */
 const isDiffTool = computed(() => props.item.name === 'Edit' || props.item.name === 'Write')
-const open = ref(isDiffTool.value)
+const open = ref(false)
 const statusIcon = computed(() => STATUS[props.item.status]?.icon ?? 'clock')
 const statusLabel = computed(() => STATUS[props.item.status]?.label ?? props.item.status)
 const inputText = computed(() => JSON.stringify(props.item.input, null, 2))
@@ -99,7 +103,19 @@ const diffHtml = computed(() => {
   flex: none; display: inline-flex; gap: 6px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10px;
 }
-.step-wrap > .open { border-top: 1px solid var(--border); padding: 8px 10px; }
+/* 展开/收起高度过渡：grid 0fr→1fr 不需要预知内容高度 */
+.open {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows .25s ease;
+}
+.open.on { grid-template-rows: 1fr; }
+.open-in { overflow: hidden; min-height: 0; }
+.open-pad { border-top: 1px solid var(--border); padding: 8px 10px; }
+/* reset.css 在系统「减少动态效果」时把动画压到 0.01ms；展开过渡是操作反馈，仍需保持（照 spinner 豁免先例） */
+@media (prefers-reduced-motion: reduce) {
+  .open { transition: grid-template-rows .25s ease !important; }
+}
 
 .io {
   background: var(--bg-input); border: 1px solid var(--border);

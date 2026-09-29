@@ -7,8 +7,9 @@ import {
   TasksTemplates, TasksSaveTemplate, TasksDeleteTemplate,
   OnTasksChanged, OnTasksRunChanged, OnTasksRunEvent,
 } from '../composables/useElectron';
+import { createStreamFlattener } from '../utils/tasks';
 import type {
-  EventEnvelope, NormalizedEventDto, PreviewResult, RunDto, ScheduleDto, TaskDto, TaskTemplateDto,
+  EventEnvelope, NormalizedEventDto, PreviewResult, RunDto, ScheduleDto, StreamItem, TaskDto, TaskTemplateDto,
 } from '../types/tasks';
 
 const RUN_PAGE = 30;
@@ -20,6 +21,12 @@ export const useTasksStore = defineStore('tasks', () => {
   const runsHasMore = ref(false);
   const activeRunId = ref<string | null>(null);
   const events = ref<EventEnvelope[]>([]);
+  /** 已 flatten 的线性条目：增量维护，RunStreamView 直接消费（不再每帧全量 flatten） */
+  const streamItems = ref<StreamItem[]>([]);
+  /** 历史加载完成的代数：openRun / closeRun 在赋完 streamItems 之后 +1，
+   *  播放队列据此把当前内容当历史直接全量显示、不打字机回放 */
+  const streamEpoch = ref(0);
+  let flattener = createStreamFlattener();
   const loading = ref(false);
   const loadError = ref<string | null>(null);
   /** 用户自建模板（主进程落盘）。内置模板是渲染层的纯数据，见 utils/taskTemplates.ts */
@@ -53,6 +60,9 @@ export const useTasksStore = defineStore('tasks', () => {
     activeTaskId.value = id;
     activeRunId.value = null;
     events.value = [];
+    streamItems.value = [];
+    flattener = createStreamFlattener();
+    streamEpoch.value += 1;
     runs.value = [];
     runsHasMore.value = false;
     await loadRuns(false);
@@ -92,6 +102,9 @@ export const useTasksStore = defineStore('tasks', () => {
       runs.value = [];
       activeRunId.value = null;
       events.value = [];
+      streamItems.value = [];
+      flattener = createStreamFlattener();
+      streamEpoch.value += 1;
     }
     await load();
   }
@@ -122,14 +135,24 @@ export const useTasksStore = defineStore('tasks', () => {
   async function openRun(runId: string) {
     activeRunId.value = runId;
     events.value = [];
+    streamItems.value = [];
+    flattener = createStreamFlattener();
     followTail.value = true;
     const initial = (await TasksRunEvents(runId, {})) as EventEnvelope[];
+    // 拉取期间可能穿插过该 run 的推送：与原 events.value = initial 同语义 —— 全量覆盖，
+    // flattener 一并重建，保证 streamItems 与 events 从同一起点推进。
     events.value = initial;
+    flattener = createStreamFlattener();
+    streamItems.value = flattener.push(initial);
+    streamEpoch.value += 1;
   }
 
   function closeRun() {
     activeRunId.value = null;
     events.value = [];
+    streamItems.value = [];
+    flattener = createStreamFlattener();
+    streamEpoch.value += 1;
   }
 
   async function preview(schedule: ScheduleDto): Promise<PreviewResult> {
@@ -172,7 +195,13 @@ export const useTasksStore = defineStore('tasks', () => {
       if (!r) return;
       if (r.taskId === activeTaskId.value) {
         const idx = runs.value.findIndex((x) => x.id === r.id);
+        // 自动触发的新 run（scheduler 建的，不经 runNow）也要切进详情，否则 OnTasksRunEvent
+        // 的 activeRunId 过滤会把它的事件全丢。钉住判定必须在插入列表前算：activeRunId 停在
+        // runs[0]（默认最新视图）或为空才算「没钉」，用户点过更早历史行就不打断。
+        const pinned =
+          activeRunId.value !== null && activeRunId.value !== runs.value[0]?.id;
         runs.value = idx === -1 ? [r, ...runs.value] : runs.value.map((x) => (x.id === r.id ? r : x));
+        if (idx === -1 && !pinned) void openRun(r.id);
       }
     });
     const off3 = OnTasksRunEvent((payload) => {
@@ -184,6 +213,7 @@ export const useTasksStore = defineStore('tasks', () => {
           : { seq: events.value.length + i, ts: Date.now(), event: e as NormalizedEventDto }),
       );
       events.value = [...events.value, ...incoming];
+      streamItems.value = flattener.push(incoming);
     });
     return () => {
       off1();
@@ -193,7 +223,8 @@ export const useTasksStore = defineStore('tasks', () => {
   }
 
   return {
-    tasks, activeTaskId, runs, runsHasMore, activeRunId, events, loading, loadError, followTail,
+    tasks, activeTaskId, runs, runsHasMore, activeRunId, events, streamItems, streamEpoch,
+    loading, loadError, followTail,
     userTemplates, activeTask, activeRun,
     load, select, loadRuns, saveTask, remove, setEnabled, runNow, cancel,
     openRun, closeRun, preview, loadTemplates, saveTemplate, deleteTemplate, bindPush,
