@@ -614,6 +614,13 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   min-height: 0;
+  /* 让字符网格离容器边缘留出一圈：xterm 本身没有 padding 选项，靠外层内缩实现。
+     加在外层而非 .xterm-container，是因为 FitAddon 用 parentElement 的宽高算 cols/rows，
+     容器自身带 padding 会让列数计算偏大。inset:0 的遮罩仍覆盖整块。
+     背景跟 --term-bg（终端主题色）而不是 --bg-terminal，切换配色时这圈留白同步变色，
+     否则会露出一条与终端底色不一致的边框。 */
+  padding: 8px;
+  background: var(--term-bg);
 }
 
 .xterm-container {
