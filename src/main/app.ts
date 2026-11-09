@@ -408,6 +408,8 @@ export class App {
   private inputLineBuffers = new Map<string, string>();
   // 每个 session 的 ANSI 转义序列解析阶段（跨批次），避免功能键 / 握手序列污染行缓冲。
   private inputEscapeStates = new Map<string, EscapePhase>();
+  // 已应答过 XTVERSION 查询的 session：只答一次，避免 Claude Code 后续重发时注入多余字节。
+  private xtversionAnswered = new Set<string>();
   // 检测到 /clear 后待迁移的 session：快照 clear 时刻已知 jsonl，轮询找新出现的 id。
   private pendingClear: { oldId: string; workDir: string; knownIds: Set<string>; attempts: number } | null = null;
   // 检测到 /resume 后待迁移的 session：快照 resume 时刻已知 jsonl，轮询找被重新写入（mtime 更新）的旧会话。
@@ -2276,6 +2278,17 @@ export class App {
     const onData = (data: string) => {
       this.ptyOutBatcher.push(id, data);
       session.appendBuffer(id, data);
+      // 应答 XTVERSION 查询（\x1b[>0q）：Claude Code 启动时用它探测终端，
+      // 收不到应答会走「未知终端」渲染路径——增量渲染多发一个前导 \b，
+      // 使输入框首个字符左移一列且退格删不掉（anthropics/claude-code#82247）。
+      if (!this.xtversionAnswered.has(id) && data.includes('\x1b[>0q')) {
+        this.xtversionAnswered.add(id);
+        try {
+          session.writeInput(id, '\x1bP>|xterm.js(6.1.0)\x1b\\');
+        } catch {
+          /* session 已关闭，忽略 */
+        }
+      }
     };
 
     const onExit = (info: import('./pty.js').PtyExitInfo) => {
@@ -2313,6 +2326,7 @@ export class App {
       }
       this.inputLineBuffers.delete(id);
       this.ptyCleanups.delete(id);
+      this.xtversionAnswered.delete(id);
       const proxyIdx = this.apiProxies.findIndex((p) => p.sessionId === id);
       if (proxyIdx >= 0) {
         const [proxy] = this.apiProxies.splice(proxyIdx, 1);
