@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 610" width="1000" height="610" font-family="Microsoft YaHei, PingFang SC, Segoe UI, sans-serif">
+  <rect x="0" y="0" width="1000" height="610" fill="#f7f9fc"/>
+  <text x="30" y="34" font-size="19" font-weight="700" fill="#1f2937">Git 工作区：IDEA 习惯 + cc-haha「审阅」</text>
+  <text x="30" y="55" font-size="12" fill="#6b7280">打开即见变更清单；点击即看 diff；上下 inline 与左右双栏一键切换</text>
+
+  <!-- 顶部视图切换 -->
+  <rect x="30" y="72" width="940" height="34" rx="6" fill="#ffffff" stroke="#cbd5e1"/>
+  <rect x="36" y="78" width="86" height="22" rx="4" fill="#f1f5f9"/>
+  <text x="54" y="94" font-size="11" fill="#475569">文件</text>
+  <rect x="126" y="78" width="106" height="22" rx="4" fill="#dbeafe" stroke="#2563eb"/>
+  <text x="144" y="94" font-size="11" font-weight="700" fill="#1d4ed8">Git</text>
+  <circle cx="216" cy="89" r="8" fill="#dc2626"/>
+  <text x="212" y="93" font-size="9" font-weight="700" fill="#ffffff">12</text>
+  <text x="250" y="94" font-size="11" fill="#94a3b8">← 与「文件」并排的一级入口（收起态也带徽章）</text>
+
+  <!-- 主容器 -->
+  <rect x="30" y="116" width="940" height="410" rx="10" fill="#ffffff" stroke="#e5e7eb"/>
+
+  <!-- 顶栏 -->
+  <rect x="42" y="128" width="916" height="42" rx="6" fill="#f8fafc" stroke="#cbd5e1"/>
+  <rect x="50" y="136" width="118" height="26" rx="4" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="60" y="153" font-size="11" fill="#334155">main ▾</text>
+  <rect x="174" y="136" width="130" height="26" rx="4" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="184" y="153" font-size="11" fill="#334155">worktree ▾</text>
+  <text x="312" y="153" font-size="10" fill="#94a3b8">↑2  ↓1</text>
+  <rect x="372" y="136" width="72" height="26" rx="4" fill="#eff6ff" stroke="#93c5fd"/>
+  <text x="388" y="153" font-size="11" font-weight="700" fill="#1d4ed8">Pull</text>
+  <rect x="450" y="136" width="82" height="26" rx="4" fill="#eff6ff" stroke="#93c5fd"/>
+  <text x="464" y="153" font-size="11" font-weight="700" fill="#1d4ed8">Commit</text>
+  <rect x="538" y="136" width="72" height="26" rx="4" fill="#eff6ff" stroke="#93c5fd"/>
+  <text x="554" y="153" font-size="11" font-weight="700" fill="#1d4ed8">Push</text>
+  <rect x="616" y="136" width="62" height="26" rx="4" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="628" y="153" font-size="11" fill="#475569">刷新</text>
+  <text x="694" y="153" font-size="10" fill="#94a3b8">带文字 + busy 进度 + 失败原因（现在只有 13px 图标）</text>
+
+  <!-- 左：变更清单 -->
+  <rect x="42" y="180" width="330" height="290" rx="6" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="54" y="201" font-size="12" font-weight="700" fill="#334155">变更清单（树形 · 可拖宽 240–480px）</text>
+
+  <rect x="54" y="210" width="120" height="22" rx="4" fill="#dbeafe"/>
+  <text x="66" y="225" font-size="10" fill="#1d4ed8">工作区变更</text>
+  <rect x="178" y="210" width="106" height="22" rx="4" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="190" y="225" font-size="10" fill="#64748b">本轮改动</text>
+  <text x="290" y="225" font-size="9" fill="#059669">cc-haha 口径</text>
+
+  <rect x="54" y="240" width="306" height="24" rx="3" fill="#e2e8f0"/>
+  <text x="64" y="256" font-size="10" fill="#475569">▾ 暂存的更改 (1)</text>
+  <rect x="66" y="268" width="20" height="14" rx="3" fill="#16a34a"/>
+  <text x="73" y="279" font-size="9" font-weight="700" fill="#ffffff">M</text>
+  <text x="94" y="279" font-size="10" fill="#334155">GitPanel.vue</text>
+  <text x="290" y="279" font-size="9" fill="#94a3b8">[−]</text>
+
+  <rect x="54" y="290" width="306" height="24" rx="3" fill="#e2e8f0"/>
+  <text x="64" y="306" font-size="10" fill="#475569">▾ src/main (2)</text>
+  <rect x="66" y="318" width="20" height="14" rx="3" fill="#16a34a"/>
+  <text x="73" y="329" font-size="9" font-weight="700" fill="#ffffff">M</text>
+  <text x="94" y="329" font-size="10" fill="#334155">git.ts</text>
+  <text x="290" y="329" font-size="9" fill="#94a3b8">[+][↺]</text>
+  <rect x="66" y="338" width="20" height="14" rx="3" fill="#dc2626"/>
+  <text x="73" y="349" font-size="9" font-weight="700" fill="#ffffff">D</text>
+  <text x="94" y="349" font-size="10" fill="#334155">legacy.ts</text>
+
+  <rect x="54" y="360" width="306" height="24" rx="3" fill="#e2e8f0"/>
+  <text x="64" y="376" font-size="10" fill="#475569">▾ 未跟踪 (1)</text>
+  <rect x="66" y="388" width="20" height="14" rx="3" fill="#f59e0b"/>
+  <text x="73" y="399" font-size="9" font-weight="700" fill="#ffffff">?</text>
+  <text x="94" y="399" font-size="10" fill="#334155">notes.md</text>
+
+  <text x="54" y="424" font-size="10" fill="#64748b">☑ 复选 → 批量 stage / unstage / discard（已支持 paths[]）</text>
+  <text x="54" y="442" font-size="10" fill="#64748b">右键：暂存 / 丢弃 / 打开文件 / 在文件树中定位</text>
+  <text x="54" y="460" font-size="10" fill="#059669">「放弃本轮」= discard(本轮文件列表) + 二次确认</text>
+
+  <!-- 提交区 -->
+  <rect x="42" y="478" width="330" height="38" rx="5" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="52" y="502" font-size="10" fill="#94a3b8">☐ amend</text>
+  <rect x="118" y="486" width="146" height="22" rx="3" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="126" y="501" font-size="10" fill="#94a3b8">提交说明…</text>
+  <rect x="270" y="486" width="92" height="22" rx="3" fill="#2563eb"/>
+  <text x="286" y="501" font-size="10" font-weight="700" fill="#ffffff">提交并推送</text>
+
+  <!-- 右：diff 区 -->
+  <rect x="382" y="180" width="576" height="336" rx="6" fill="#f8fafc" stroke="#cbd5e1"/>
+  <rect x="394" y="192" width="552" height="34" rx="4" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="406" y="214" font-size="11" fill="#334155">src/main/git.ts</text>
+  <text x="530" y="214" font-size="10" fill="#94a3b8">HEAD ↔ 工作区</text>
+  <rect x="640" y="198" width="76" height="22" rx="3" fill="#dbeafe"/>
+  <text x="652" y="213" font-size="10" font-weight="700" fill="#1d4ed8">上下 inline</text>
+  <rect x="720" y="198" width="76" height="22" rx="3" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="732" y="213" font-size="10" fill="#64748b">左右双栏</text>
+  <text x="806" y="213" font-size="10" fill="#64748b">← 上处 / 下处 →</text>
+
+  <rect x="394" y="234" width="552" height="270" rx="4" fill="#ffffff" stroke="#cbd5e1"/>
+  <!-- inline diff 示意 -->
+  <rect x="394" y="234" width="552" height="22" rx="0" fill="#f1f5f9"/>
+  <text x="406" y="249" font-size="10" fill="#94a3b8">inline / unified：删除行在上，新增行在下（同一个 Monaco DiffEditor）</text>
+  <rect x="394" y="258" width="552" height="20" fill="#fef2f2"/>
+  <text x="406" y="272" font-size="10" fill="#b91c1c">−  const r = await g.pull();</text>
+  <rect x="394" y="278" width="552" height="20" fill="#ecfdf5"/>
+  <text x="406" y="292" font-size="10" fill="#047857">+  const r = await g.pull(opts);</text>
+  <rect x="394" y="298" width="552" height="20" fill="#ffffff"/>
+  <text x="406" y="312" font-size="10" fill="#64748b">   return { ok: true, summary: ... };</text>
+  <rect x="394" y="318" width="552" height="20" fill="#fef2f2"/>
+  <text x="406" y="332" font-size="10" fill="#b91c1c">−  const changed = r.summary?.changes ?? 0;</text>
+  <rect x="394" y="338" width="552" height="20" fill="#ecfdf5"/>
+  <text x="406" y="352" font-size="10" fill="#047857">+  const changed = r.summary?.changes ?? 0; // 带 rebase 选项</text>
+  <rect x="394" y="358" width="552" height="20" fill="#ffffff"/>
+  <text x="406" y="372" font-size="10" fill="#64748b">   ...</text>
+
+  <rect x="394" y="390" width="552" height="100" rx="4" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="406" y="410" font-size="11" font-weight="600" fill="#334155">双栏模式（当前已实现）</text>
+  <rect x="406" y="420" width="256" height="58" rx="3" fill="#ffffff" stroke="#e2e8f0"/>
+  <text x="416" y="438" font-size="10" fill="#94a3b8">original · HEAD</text>
+  <rect x="416" y="446" width="200" height="6" rx="2" fill="#fecaca"/>
+  <rect x="416" y="458" width="160" height="6" rx="2" fill="#e2e8f0"/>
+  <rect x="670" y="420" width="264" height="58" rx="3" fill="#ffffff" stroke="#e2e8f0"/>
+  <text x="680" y="438" font-size="10" fill="#94a3b8">modified · WORKTREE</text>
+  <rect x="680" y="446" width="212" height="6" rx="2" fill="#bbf7d0"/>
+  <rect x="680" y="458" width="176" height="6" rx="2" fill="#e2e8f0"/>
+
+  <!-- 底部 -->
+  <rect x="30" y="536" width="940" height="36" rx="6" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="44" y="559" font-size="11" fill="#475569">底部可切 Tab：提交历史图 / 项目终端（沿用 BottomPanel，v-show 保活；PTY buffer 不丢）</text>
+  <text x="668" y="559" font-size="10" fill="#94a3b8">绿 = 新增　红 = 删除</text>
+
+  <text x="30" y="596" font-size="11" fill="#94a3b8">关键约束：全应用只有一个 DiffEditor 实例；两种视图靠 updateOptions({ renderSideBySide }) 切换，零新增依赖 / 零新增实例</text>
+</svg>

@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 470" width="1000" height="470" font-family="Microsoft YaHei, PingFang SC, Segoe UI, sans-serif">
+  <rect x="0" y="0" width="1000" height="470" fill="#f7f9fc"/>
+  <text x="30" y="34" font-size="19" font-weight="700" fill="#1f2937">文件：Markdown 三模式（最轻量路径 A）</text>
+  <text x="30" y="55" font-size="12" fill="#6b7280">仅对 .md / .markdown 生效；其它文件完全走现有 Monaco 路径，行为零变化</text>
+
+  <!-- 模式 1 -->
+  <rect x="30" y="76" width="300" height="270" rx="10" fill="#ffffff" stroke="#e5e7eb"/>
+  <rect x="30" y="76" width="300" height="36" rx="10" fill="#eff6ff"/>
+  <text x="46" y="100" font-size="14" font-weight="700" fill="#1d4ed8">editor</text>
+  <text x="150" y="100" font-size="11" fill="#6b7280">纯源码（现状）</text>
+
+  <rect x="46" y="124" width="268" height="26" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <rect x="50" y="128" width="58" height="18" rx="3" fill="#dbeafe"/>
+  <text x="60" y="141" font-size="10" fill="#1d4ed8">editor</text>
+  <rect x="112" y="128" width="92" height="18" rx="3" fill="#ffffff"/>
+  <text x="122" y="141" font-size="10" fill="#94a3b8">split</text>
+  <rect x="208" y="128" width="92" height="18" rx="3" fill="#ffffff"/>
+  <text x="218" y="141" font-size="10" fill="#94a3b8">preview</text>
+
+  <rect x="46" y="160" width="268" height="168" rx="5" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="58" y="182" font-size="11" fill="#64748b">Monaco（唯一实例）</text>
+  <rect x="58" y="194" width="180" height="7" rx="3" fill="#cbd5e1"/>
+  <rect x="58" y="208" width="230" height="7" rx="3" fill="#e2e8f0"/>
+  <rect x="58" y="222" width="150" height="7" rx="3" fill="#e2e8f0"/>
+  <rect x="58" y="236" width="206" height="7" rx="3" fill="#e2e8f0"/>
+  <rect x="58" y="250" width="120" height="7" rx="3" fill="#e2e8f0"/>
+  <rect x="58" y="264" width="196" height="7" rx="3" fill="#e2e8f0"/>
+  <text x="58" y="302" font-size="11" fill="#94a3b8">Ctrl+S · 脏标记 · 草稿，全部沿用</text>
+
+  <!-- 模式 2 -->
+  <rect x="350" y="76" width="300" height="270" rx="10" fill="#ffffff" stroke="#2563eb" stroke-width="2"/>
+  <rect x="350" y="76" width="300" height="36" rx="10" fill="#eff6ff"/>
+  <text x="366" y="100" font-size="14" font-weight="700" fill="#1d4ed8">editor &amp; preview</text>
+  <text x="536" y="100" font-size="11" fill="#1d4ed8">推荐默认</text>
+
+  <rect x="366" y="124" width="268" height="26" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <rect x="370" y="128" width="58" height="18" rx="3" fill="#ffffff"/>
+  <text x="380" y="141" font-size="10" fill="#94a3b8">editor</text>
+  <rect x="432" y="128" width="92" height="18" rx="3" fill="#dbeafe"/>
+  <text x="452" y="141" font-size="10" font-weight="700" fill="#1d4ed8">split</text>
+  <rect x="528" y="128" width="92" height="18" rx="3" fill="#ffffff"/>
+  <text x="538" y="141" font-size="10" fill="#94a3b8">preview</text>
+
+  <rect x="366" y="160" width="132" height="168" rx="5" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="376" y="182" font-size="10" fill="#64748b">Monaco</text>
+  <rect x="376" y="194" width="104" height="7" rx="3" fill="#cbd5e1"/>
+  <rect x="376" y="208" width="88" height="7" rx="3" fill="#e2e8f0"/>
+  <rect x="376" y="222" width="112" height="7" rx="3" fill="#e2e8f0"/>
+  <rect x="376" y="236" width="76" height="7" rx="3" fill="#e2e8f0"/>
+  <rect x="376" y="250" width="100" height="7" rx="3" fill="#e2e8f0"/>
+
+  <rect x="502" y="160" width="132" height="168" rx="5" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="512" y="182" font-size="10" fill="#64748b">预览（纯 DOM）</text>
+  <rect x="512" y="194" width="96" height="12" rx="2" fill="#dbeafe"/>
+  <rect x="512" y="214" width="112" height="6" rx="3" fill="#e2e8f0"/>
+  <rect x="512" y="226" width="92" height="6" rx="3" fill="#e2e8f0"/>
+  <rect x="512" y="244" width="112" height="30" rx="3" fill="#f1f5f9"/>
+  <rect x="512" y="282" width="80" height="6" rx="3" fill="#e2e8f0"/>
+  <rect x="512" y="294" width="110" height="6" rx="3" fill="#e2e8f0"/>
+
+  <!-- 模式 3 -->
+  <rect x="670" y="76" width="300" height="270" rx="10" fill="#ffffff" stroke="#e5e7eb"/>
+  <rect x="670" y="76" width="300" height="36" rx="10" fill="#eff6ff"/>
+  <text x="686" y="100" font-size="14" font-weight="700" fill="#1d4ed8">preview</text>
+  <text x="790" y="100" font-size="11" fill="#6b7280">只读渲染结果</text>
+
+  <rect x="686" y="124" width="268" height="26" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <rect x="690" y="128" width="58" height="18" rx="3" fill="#ffffff"/>
+  <text x="700" y="141" font-size="10" fill="#94a3b8">editor</text>
+  <rect x="752" y="128" width="92" height="18" rx="3" fill="#ffffff"/>
+  <text x="772" y="141" font-size="10" fill="#94a3b8">split</text>
+  <rect x="848" y="128" width="92" height="18" rx="3" fill="#dbeafe"/>
+  <text x="862" y="141" font-size="10" font-weight="700" fill="#1d4ed8">preview</text>
+
+  <rect x="686" y="160" width="268" height="168" rx="5" fill="#ffffff" stroke="#cbd5e1"/>
+  <rect x="700" y="176" width="150" height="16" rx="2" fill="#dbeafe"/>
+  <rect x="700" y="202" width="240" height="7" rx="3" fill="#e2e8f0"/>
+  <rect x="700" y="216" width="210" height="7" rx="3" fill="#e2e8f0"/>
+  <rect x="700" y="236" width="240" height="38" rx="3" fill="#f1f5f9"/>
+  <rect x="700" y="284" width="180" height="7" rx="3" fill="#e2e8f0"/>
+  <rect x="700" y="298" width="232" height="7" rx="3" fill="#e2e8f0"/>
+  <text x="700" y="320" font-size="10" fill="#94a3b8">Monaco 用 v-show 隐藏，切回需 rAF(layout())</text>
+
+  <!-- 底部：轻量措施 -->
+  <rect x="30" y="362" width="940" height="88" rx="10" fill="#ecfdf5" stroke="#a7f3d0"/>
+  <text x="46" y="386" font-size="13" font-weight="700" fill="#047857">「最轻量 / 最省资源」的 7 条硬措施</text>
+  <text x="46" y="408" font-size="11" fill="#065f46">① 零新增依赖（marked + DOMPurify 已在 bundle）　② 零新增 Monaco 实例，共享同一 model　③ 输入 150ms debounce + rAF 合并　④ 同步 parse，无 worker / WASM</text>
+  <text x="46" y="428" font-size="11" fill="#065f46">⑤ &gt;200KB / &gt;5000 行降级预览　⑥ editorEl 常驻同一 DOM 节点，只用 v-show 与 CSS 调宽　⑦ 草稿直接取 store.drafts，不额外读文件 / 不走 IPC</text>
+  <text x="46" y="442" font-size="11" fill="#065f46">不做：WYSIWYG 富文本引擎、Mermaid、代码块语法高亮、图片上传　｜　必须：DOMPurify 净化（用户 .md 属外部内容）</text>
+</svg>
