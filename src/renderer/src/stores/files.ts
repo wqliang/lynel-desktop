@@ -1,4 +1,4 @@
-import { defineStore } from 'pinia'
+import { acceptHMRUpdate, defineStore } from 'pinia'
 import { ref } from 'vue'
 import {
   FileListDir, FileRead, FileWrite, FileCreate, FileRename, FileDelete,
@@ -35,6 +35,38 @@ function readMdMode(): MdMode {
   return MD_MODE_DEFAULT
 }
 
+/** 右栏顶部的一级视图：文件工作区（左栏文件树）/ Git 工作区（左栏变更清单）。
+ *  注意与 activeView（编辑器区 file|diff）是两层概念，不能混用。 */
+export type RightPaneView = 'file' | 'git'
+/** diff 布局：side = 左右双栏，inline = 上下统一（Monaco renderSideBySide）。 */
+export type DiffLayout = 'side' | 'inline'
+
+const RIGHT_VIEW_KEY = 'lynel:right-pane-view'
+const DIFF_LAYOUT_KEY = 'lynel:git-diff-layout'
+const GIT_HISTORY_KEY = 'lynel:git-history-open'
+const RIGHT_VIEW_DEFAULT: RightPaneView = 'file'
+const DIFF_LAYOUT_DEFAULT: DiffLayout = 'side'
+
+function readRightView(): RightPaneView {
+  try {
+    const v = localStorage.getItem(RIGHT_VIEW_KEY)
+    if (v === 'file' || v === 'git') return v
+  } catch { /* localStorage 不可用 */ }
+  return RIGHT_VIEW_DEFAULT
+}
+function readDiffLayout(): DiffLayout {
+  try {
+    const v = localStorage.getItem(DIFF_LAYOUT_KEY)
+    if (v === 'side' || v === 'inline') return v
+  } catch { /* localStorage 不可用 */ }
+  return DIFF_LAYOUT_DEFAULT
+}
+/** 提交历史折叠进 Git 工作区后，右侧内容区是否停在历史视图。默认回 diff/编辑器，
+ *  避免新会话一进 Git 视图就看不到变更文件的 diff。 */
+function readGitHistoryOpen(): boolean {
+  try { return localStorage.getItem(GIT_HISTORY_KEY) === '1' } catch { return false }
+}
+
 /** 按会话记忆的工作区现场（tab / 草稿 / 激活文件 / 展开态 / 右栏展开态） */
 export interface SessionWorkspace {
   openFiles: OpenFile[]
@@ -47,6 +79,12 @@ export interface SessionWorkspace {
   collapsed: boolean
   /** 该会话最后一次使用的 md 布局模式；老快照缺字段时回落全局偏好 */
   mdMode: MdMode
+  /** 该会话右栏一级视图；老快照缺字段时回落全局偏好 */
+  rightView: RightPaneView
+  /** diff 布局偏好；老快照缺字段时回落全局偏好 */
+  diffLayout: DiffLayout
+  /** Git 视图右侧内容区是否停在提交历史；老快照缺字段时回落全局偏好 */
+  gitHistoryOpen: boolean
 }
 
 export const useFilesStore = defineStore('files', () => {
@@ -86,10 +124,44 @@ export const useFilesStore = defineStore('files', () => {
   const splitOpen = ref(false)
   /** md 文件的布局模式：全局偏好作为初值，切会话时按现场还原 */
   const mdMode = ref<MdMode>(readMdMode())
+  /** 右栏一级视图（文件 / Git）：全局偏好 + 按会话现场 */
+  const rightView = ref<RightPaneView>(readRightView())
+  /** diff 布局：全局偏好 + 按会话现场 */
+  const diffLayout = ref<DiffLayout>(readDiffLayout())
+  /** Git 视图右侧内容区：false = 编辑器/diff，true = 提交历史图。全局偏好 + 按会话现场 */
+  const gitHistoryOpen = ref<boolean>(readGitHistoryOpen())
 
   function setMdMode(mode: MdMode) {
     mdMode.value = mode
     try { localStorage.setItem(MD_MODE_KEY, mode) } catch { /* localStorage 不可用 */ }
+  }
+
+  /** 切到 Git 视图时顺带把右栏展开，避免用户在收起态点了分段却看不到内容。 */
+  function setRightView(v: RightPaneView) {
+    rightView.value = v
+    if (v === 'git') splitOpen.value = true
+    try { localStorage.setItem(RIGHT_VIEW_KEY, v) } catch { /* localStorage 不可用 */ }
+  }
+
+  function setDiffLayout(v: DiffLayout) {
+    diffLayout.value = v
+    try { localStorage.setItem(DIFF_LAYOUT_KEY, v) } catch { /* localStorage 不可用 */ }
+  }
+
+  function setGitHistoryOpen(v: boolean) {
+    gitHistoryOpen.value = v
+    try { localStorage.setItem(GIT_HISTORY_KEY, v ? '1' : '0') } catch { /* localStorage 不可用 */ }
+  }
+
+  /** 「右栏」按钮的单一动作：展开右栏并回到文件工作区（文件树 + 编辑器）。
+   *  rightView 是全局持久化偏好，上次停在 Git 视图 / 提交历史时，重启后右栏会
+   *  直接展开成变更清单，用户找不到文件面板；显式切回 file 并写入偏好，下次启动
+   *  默认也是文件面板。历史图只在 Git 视图下显示，顺手关掉避免切回 Git 视图时
+   *  又直接落在历史图上。 */
+  function openFilePane() {
+    setRightView('file')
+    splitOpen.value = true
+    setGitHistoryOpen(false)
   }
 
   // 每个会话独立记忆的工作区现场。切换会话即时还原。
@@ -113,6 +185,9 @@ export const useFilesStore = defineStore('files', () => {
           splitOpen: splitOpen.value,
           collapsed: collapsed.value,
           mdMode: mdMode.value,
+          rightView: rightView.value,
+          diffLayout: diffLayout.value,
+          gitHistoryOpen: gitHistoryOpen.value,
         },
       }
     }
@@ -136,12 +211,17 @@ export const useFilesStore = defineStore('files', () => {
       drafts.value = { ...saved.drafts }
       activeRelPath.value = saved.activeRelPath
       expanded.value = new Set(saved.expanded)
-      // 展开态跟着文件 tab 组记忆，但没有任何 tab 时不恢复（否则是个空右栏）
-      splitOpen.value = saved.splitOpen && saved.openFiles.length > 0
+      // 展开态跟着文件 tab 组记忆，但没有任何 tab 时不恢复（否则是个空右栏）。
+      // 例外：上次停在 Git 视图时，即使没有打开的文件也要恢复展开，否则 Git 入口会「消失」。
+      const lastView = saved.rightView ?? readRightView()
+      splitOpen.value = saved.splitOpen && (saved.openFiles.length > 0 || lastView === 'git')
       // 树折叠态以该会话上一次状态为准
       collapsed.value = saved.collapsed
-      // 老快照可能没有 mdMode 字段，回落全局偏好
+      // 老快照可能没有这些字段，回落全局偏好
       mdMode.value = saved.mdMode ?? readMdMode()
+      rightView.value = lastView
+      diffLayout.value = saved.diffLayout ?? readDiffLayout()
+      gitHistoryOpen.value = saved.gitHistoryOpen ?? readGitHistoryOpen()
     } else {
       openFiles.value = []
       drafts.value = {}
@@ -152,7 +232,12 @@ export const useFilesStore = defineStore('files', () => {
       collapsed.value = false
       // 新会话采用全局偏好（即用户最近一次选择的模式）
       mdMode.value = readMdMode()
+      rightView.value = readRightView()
+      diffLayout.value = readDiffLayout()
+      gitHistoryOpen.value = readGitHistoryOpen()
     }
+    // Git 视图没有「打开文件」这个展开理由，必须自己保证右栏可见
+    if (id && rightView.value === 'git') splitOpen.value = true
     // 4. 挂载新目录 watcher + 拉取根目录；恢复的展开目录内容需重新惰性拉取
     if (wd) {
       await FileWatch(wd).catch(() => {})
@@ -182,6 +267,9 @@ export const useFilesStore = defineStore('files', () => {
   function openDiff(relPath: string, left: string, right: string, label: string) {
     diffRequest.value = { relPath, left, right, label }
     activeView.value = 'diff'
+    // 历史图占着右侧内容区时，点历史里的文件（或变更清单里的文件）必须切回 diff，
+    // 否则 openDiff 把 activeView 改了，用户却还盯着被隐藏的编辑器区。
+    setGitHistoryOpen(false)
   }
 
   function closeDiff() {
@@ -465,6 +553,12 @@ export const useFilesStore = defineStore('files', () => {
 
   // 外部变更：局部刷新树 + 处理打开文件的冲突
   let fileChangedCleanup: (() => void) | null = null
+  // 开发态 HMR 会用新 setup 重新 patch 同一个 store 实例，旧闭包里的退订函数
+  // 就再也拿不到了。把 cleanup 挂到 hot.data 上跨模块版本保存，重新订阅前先退订，
+  // 否则每热更新一次就叠加一个 file:changed 监听（一次文件改动刷新 N 次树）。
+  const hotData = import.meta.hot?.data as
+    | { fileChangedCleanup?: (() => void) | null }
+    | undefined
 
   /** 刷新后选中项已不在树里（外部删除）→ 清空选中（spec §1：watcher 删除 → 清空若是被删项）。
    *  按选中项的父目录查 tree[parent]；根级选中查 tree['']。父目录未加载（查不到）时不清，
@@ -479,6 +573,7 @@ export const useFilesStore = defineStore('files', () => {
   }
 
   function initWatcher() {
+    hotData?.fileChangedCleanup?.()
     fileChangedCleanup?.()
     fileChangedCleanup = FileChanged((e: { workDir: string; relPath: string }) => {
       if (e.workDir !== workDir.value) return
@@ -490,6 +585,7 @@ export const useFilesStore = defineStore('files', () => {
       if (f && !f.dirty) void reloadFile(e.relPath).catch(() => {})
       else if (f && f.dirty) f.externalChanged = true
     })
+    if (hotData) hotData.fileChangedCleanup = fileChangedCleanup
   }
   initWatcher()
 
@@ -497,11 +593,25 @@ export const useFilesStore = defineStore('files', () => {
     workDir, currentSessionId, tree, expanded, openFiles, drafts, activeRelPath, collapsed,
     createAtRequest, selectedRelPath, clipboard, dragRel, dropTargetRel,
     splitOpen, mdMode, setMdMode,
+    rightView, setRightView, diffLayout, setDiffLayout,
+    gitHistoryOpen, setGitHistoryOpen, openFilePane,
     diffRequest, activeView, openDiff, closeDiff, activateFile,
     setSession, forgetSession, loadDir, toggleExpand, openFile, openInSplit, closeFile, saveFile, reloadFile,
     setDraft, clearDraft,
     createEntry, renameEntry, deleteEntry,
     select, entryIsDir, setClipboard, copyPath, pasteInto, moveEntry, revealEntry, collapseAll, refreshAll,
-    cleanupWatcher: () => { fileChangedCleanup?.(); fileChangedCleanup = null },
+    cleanupWatcher: () => {
+      fileChangedCleanup?.()
+      fileChangedCleanup = null
+      if (hotData) hotData.fileChangedCleanup = null
+    },
   }
 })
+
+// setup store 的模块热更新默认不会重建实例：pinia._s 里留着旧的 store，
+// 新加的 ref / action 不会挂上去。组件 HMR 后模板调用新 action 就会抛
+// "xxx is not a function"（本次「历史」按钮就是这个原因）。注册 Pinia 官方
+// HMR 适配器后，改动 store 会 patch 现有实例，无需整页重载。
+if (import.meta.hot) {
+  import.meta.hot.accept(acceptHMRUpdate(useFilesStore, import.meta.hot))
+}

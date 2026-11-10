@@ -338,3 +338,142 @@ describe('files store · md 三模式偏好', () => {
     expect(store.mdMode).toBe('split')
   })
 })
+
+describe('files store · 右栏视图与 diff 布局偏好', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+  })
+
+  it('默认文件视图 + 左右双栏 diff', () => {
+    const store = useFilesStore()
+    expect(store.rightView).toBe('file')
+    expect(store.diffLayout).toBe('side')
+  })
+
+  it('切到 Git 视图即时生效、写全局偏好，并自动展开右栏', () => {
+    const store = useFilesStore()
+    expect(store.splitOpen).toBe(false)
+    store.setRightView('git')
+    expect(store.rightView).toBe('git')
+    expect(store.splitOpen).toBe(true)
+    expect(localStorage.getItem('lynel:right-pane-view')).toBe('git')
+  })
+
+  it('切到 inline diff 即时生效并写全局偏好', () => {
+    const store = useFilesStore()
+    store.setDiffLayout('inline')
+    expect(store.diffLayout).toBe('inline')
+    expect(localStorage.getItem('lynel:git-diff-layout')).toBe('inline')
+  })
+
+  it('新建 store 读取全局偏好；非法值回落默认值', () => {
+    localStorage.setItem('lynel:right-pane-view', 'git')
+    localStorage.setItem('lynel:git-diff-layout', 'inline')
+    setActivePinia(createPinia())
+    expect(useFilesStore().rightView).toBe('git')
+    expect(useFilesStore().diffLayout).toBe('inline')
+
+    localStorage.setItem('lynel:right-pane-view', 'bogus')
+    localStorage.setItem('lynel:git-diff-layout', 'bogus')
+    setActivePinia(createPinia())
+    expect(useFilesStore().rightView).toBe('file')
+    expect(useFilesStore().diffLayout).toBe('side')
+  })
+
+  it('按会话记忆：切走再切回恢复该会话的视图与 diff 布局', async () => {
+    const store = useFilesStore()
+    await store.setSession('s1', '/repo')
+    store.setRightView('git')
+    store.setDiffLayout('inline')
+    await store.setSession('s2', '/other')
+    store.setRightView('file')
+    store.setDiffLayout('side')
+    await store.setSession('s1', '/repo')
+    expect(store.rightView).toBe('git')
+    expect(store.diffLayout).toBe('inline')
+  })
+
+  it('Git 视图且无打开文件时，切走再切回仍保持右栏展开', async () => {
+    const store = useFilesStore()
+    await store.setSession('s1', '/repo')
+    store.setRightView('git')
+    expect(store.openFiles).toHaveLength(0)
+    await store.setSession('s2', '/other')
+    await store.setSession('s1', '/repo')
+    expect(store.rightView).toBe('git')
+    expect(store.splitOpen).toBe(true)
+  })
+
+  it('「右栏」入口：从收起的 Git 视图 + 历史图一键回到文件面板，并写回偏好', () => {
+    const store = useFilesStore()
+    store.setRightView('git')
+    store.setGitHistoryOpen(true)
+    store.splitOpen = false
+    store.openFilePane()
+    expect(store.rightView).toBe('file')
+    expect(store.splitOpen).toBe(true)
+    expect(store.gitHistoryOpen).toBe(false)
+    // 下次启动默认落在文件面板，不会又变成 Git 变更清单
+    expect(localStorage.getItem('lynel:right-pane-view')).toBe('file')
+    expect(localStorage.getItem('lynel:git-history-open')).toBe('0')
+  })
+
+  it('「右栏」入口：已在文件视图时只负责展开，不动 diff / 打开的文件', async () => {
+    const store = useFilesStore()
+    await store.setSession('s1', '/repo')
+    store.openDiff('src/a.ts', 'HEAD', 'WORKTREE', '工作区')
+    store.splitOpen = false
+    store.openFilePane()
+    expect(store.splitOpen).toBe(true)
+    expect(store.rightView).toBe('file')
+    expect(store.activeView).toBe('diff')
+    expect(store.diffRequest?.relPath).toBe('src/a.ts')
+  })
+})
+
+describe('files store · 提交历史并入 Git 工作区后的右侧内容区偏好', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    localStorage.clear()
+  })
+
+  it('setGitHistoryOpen 写全局偏好，默认值为 false', () => {
+    const store = useFilesStore()
+    expect(store.gitHistoryOpen).toBe(false)
+    store.setGitHistoryOpen(true)
+    expect(store.gitHistoryOpen).toBe(true)
+    expect(localStorage.getItem('lynel:git-history-open')).toBe('1')
+    store.setGitHistoryOpen(false)
+    expect(localStorage.getItem('lynel:git-history-open')).toBe('0')
+  })
+
+  it('openDiff 自动关掉历史视图，保证点历史文件能立刻看到 diff', () => {
+    const store = useFilesStore()
+    store.setGitHistoryOpen(true)
+    store.openDiff('src/a.ts', 'HEAD', 'WORKTREE', '工作区')
+    expect(store.activeView).toBe('diff')
+    expect(store.gitHistoryOpen).toBe(false)
+    expect(localStorage.getItem('lynel:git-history-open')).toBe('0')
+  })
+
+  it('新建 store 读取全局偏好；非法值回落 false', () => {
+    localStorage.setItem('lynel:git-history-open', '1')
+    setActivePinia(createPinia())
+    expect(useFilesStore().gitHistoryOpen).toBe(true)
+    localStorage.setItem('lynel:git-history-open', 'bogus')
+    setActivePinia(createPinia())
+    expect(useFilesStore().gitHistoryOpen).toBe(false)
+  })
+
+  it('按会话记忆：切走再切回恢复该会话是否停在历史视图', async () => {
+    const store = useFilesStore()
+    await store.setSession('s1', '/repo')
+    store.setGitHistoryOpen(true)
+    await store.setSession('s2', '/other')
+    expect(store.gitHistoryOpen).toBe(true) // 无现场的新会话采用全局偏好
+    store.setGitHistoryOpen(false)
+    await store.setSession('s1', '/repo')
+    expect(store.gitHistoryOpen).toBe(true)
+  })
+})

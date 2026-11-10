@@ -7,8 +7,11 @@ import type {
   GitCommitInfo,
   GitFileChange,
   GitGraphCommit,
+  GitRemoteOptions,
   GitStashEntry,
   GitStatusResult,
+  GitWorktreeAddOptions,
+  GitWorktreeInfo,
 } from '../../../main/git.js';
 import type { DshVersionInfo } from '../../../main/dsh.js';
 
@@ -179,8 +182,11 @@ export type {
   GitCommitInfo,
   GitFileChange,
   GitGraphCommit,
+  GitRemoteOptions,
   GitStashEntry,
   GitStatusResult,
+  GitWorktreeAddOptions,
+  GitWorktreeInfo,
 }
 
 type GitOk<T> = { ok: true } & T
@@ -194,10 +200,10 @@ export const GitUnstage = (workDir: string, paths: string[]) =>
   api().gitUnstage(workDir, paths) as Promise<GitOk<{}> | GitErr>
 export const GitDiscard = (workDir: string, paths: string[]) =>
   api().gitDiscard(workDir, paths) as Promise<GitOk<{}> | GitErr>
-export const GitCommit = (workDir: string, message: string) =>
-  api().gitCommit(workDir, message) as Promise<GitOk<{}> | GitErr>
-export const GitRemoteOp = (workDir: string, op: 'fetch' | 'pull' | 'push') =>
-  api().gitRemoteOp(workDir, op) as Promise<GitOk<{ summary: string }> | GitErr>
+export const GitCommit = (workDir: string, message: string, amend?: boolean) =>
+  api().gitCommit(workDir, message, amend) as Promise<GitOk<{}> | GitErr>
+export const GitRemoteOp = (workDir: string, op: 'fetch' | 'pull' | 'push', opts?: GitRemoteOptions) =>
+  api().gitRemoteOp(workDir, op, opts) as Promise<GitOk<{ summary: string }> | GitErr>
 export const GitFileAtRev = (workDir: string, rev: string, relPath: string) =>
   api().gitFileAtRev(workDir, rev, relPath) as Promise<
     GitOk<{ content: string; binary: boolean; truncated: boolean }> | GitErr
@@ -230,6 +236,14 @@ export const GitResetTo = (
   hash: string,
   mode: 'soft' | 'mixed' | 'hard',
 ) => api().gitResetTo(workDir, hash, mode) as Promise<GitOk<{}> | GitErr>
+export const GitWorktreeList = (workDir: string) =>
+  api().gitWorktreeList(workDir) as Promise<GitOk<{ data: GitWorktreeInfo[] }> | GitErr>
+export const GitWorktreeAdd = (workDir: string, opts: GitWorktreeAddOptions) =>
+  api().gitWorktreeAdd(workDir, opts) as Promise<GitOk<{}> | GitErr>
+export const GitWorktreeRemove = (workDir: string, target: string, force?: boolean) =>
+  api().gitWorktreeRemove(workDir, target, force) as Promise<GitOk<{}> | GitErr>
+export const GitWorktreePrune = (workDir: string) =>
+  api().gitWorktreePrune(workDir) as Promise<GitOk<{}> | GitErr>
 export const GitWatch = (workDir: string) => api().gitWatch(workDir) as Promise<GitOk<{}>>
 export const GitUnwatch = (workDir: string) => api().gitUnwatch(workDir) as Promise<GitOk<{}>>
 export const GitChanged = (cb: (workDir: string) => void) => EventsOn('git:changed', cb)

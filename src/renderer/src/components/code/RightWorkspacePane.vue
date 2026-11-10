@@ -5,13 +5,18 @@ import FileTabs from './FileTabs.vue'
 import CodeView from './CodeView.vue'
 import { useResizablePanel } from '../../composables/useResizablePanel'
 import { useFilesStore } from '../../stores/files'
+import { useGitStore } from '../../stores/git'
 
-/** 会话右侧文件工作区折叠栏：顶部行（「文件」标识 tab + 文件 tabs + 全屏/收起）
- *  + 文件树/编辑器（CodeView）+ 底部 Git/终端面板。
- *  收起时完全隐藏顶部行与主体，右缘只留一个展开按钮（panel-right-open，
- *  与收起的 panel-right-close 对应）当唯一入口 —— 早期版本收起态保留顶部行
- *  当展开热区，用户「点收起没反应再点一次」的第二击落在顶部行被翻回展开，
- *  净视觉效果 = 毫无反应，故整体改为图标入口。
+/** 会话右侧文件工作区折叠栏：顶部行（「文件 | Git」一级分段 + 文件 tabs + 全屏/收起）
+ *  + 文件树/变更清单 + 右侧内容区（CodeView，编辑器 / diff / 提交历史三选一）
+ *  + 底部只有终端。Git 的唯一入口就是顶部「Git」分段，提交历史也收在该视图的
+ *    右侧内容区里，底部不再放第二个 Git 区域。
+ *  收起时完全隐藏顶部行与主体，右缘只留一个纯图标展开按钮
+ *  （panel-right-open，与收起的 panel-right-close 对应）当唯一入口，留边框 +
+ *  title 保证可发现 —— 早期版本收起态保留顶部行当展开热区，用户「点收起没反应
+ *  再点一次」的第二击落在顶部行被翻回展开，净视觉效果 = 毫无反应，故改为按钮入口。
+ *  HomeView 的 sub-tabs 行另有一个常驻图标按钮，保证右栏展开在 Git 视图时
+ *  也能一键回到文件面板。
  *  主体用 v-show 不卸载，底部面板的项目终端 xterm / shell PTY 缓冲随挂载存活，
  *  收起再展开不能丢；收起态不写内联 width（宽度自适应展开按钮）。
  *  全应用唯一挂载 FileEditorPanel 的链路是 CodeView → FileEditorPanel，
@@ -42,15 +47,16 @@ function requestExpand(): void {
 }
 
 const filesStore = useFilesStore()
+const gitStore = useGitStore()
 
-/** 「文件」标识 tab：仅展开态可见（收起态整条顶部行已隐藏），点击翻转文件树折叠
- *  （store.collapsed），这是树重新展开的唯一入口（工具条折叠按钮只负责收起）。 */
-function onLabelClick(): void {
+/** 文件树折叠/展开开关。历史上这个动作挂在「文件」标识 tab 上，改成分段控件后
+ *  独立成顶部按钮 —— 否则树一旦收起就再也回不来（工具条只提供「收起」）。 */
+function onToggleTree(): void {
   filesStore.collapsed = !filesStore.collapsed
 }
-
-/** 「文件」tab 的 hover 提示，与 onLabelClick 动作对应 */
-const labelTitle = computed(() => (filesStore.collapsed ? '展开文件树' : '折叠文件树'))
+const treeToggleTitle = computed(() =>
+  (filesStore.collapsed ? '展开文件树' : '折叠文件树'),
+)
 
 const rootEl = ref<HTMLElement | null>(null)
 
@@ -137,17 +143,53 @@ onBeforeUnmount(() => {
       title="拖拽调整宽度"
       @mousedown.prevent="onResizeStart"
     />
-    <!-- 收起态唯一展开入口：纯 UI，v-if 渲染（展开态不挂） -->
+    <!-- 收起态唯一展开入口：纯 UI，v-if 渲染（展开态不挂）。
+         带上未提交变更数徽章，解决「收起时看不到有 N 个变更」。 -->
     <div v-if="!props.visible" class="expand-rail">
-      <button class="head-btn icon" title="展开右栏" aria-label="展开右栏" @click="requestExpand">
-        <Icon name="panel-right-open" :size="13" />
+      <!-- 右缘展开入口：纯图标不占宽度，保留边框与 title 便于发现（不带 .icon 定宽类）。
+           点击由 HomeView 统一走 files.openFilePane()，保证展开的就是文件面板
+           而不是上次停留的 Git 视图 / 提交历史。 -->
+      <button class="head-btn rail-btn" title="打开文件面板（右栏）" aria-label="展开右栏" @click="requestExpand">
+        <Icon name="panel-right-open" :size="14" />
+        <span v-if="gitStore.totalChanges > 0" class="rail-badge">{{ gitStore.totalChanges }}</span>
       </button>
     </div>
     <!-- 顶部行：与左侧 sub-tabs（34px）同行同高、同配色（root 不挂 code-workspace-theme，
          顶部行用原始 UI 变量对齐左侧标签行；CodeView 自带 code-workspace-theme） -->
     <div v-show="props.visible" class="right-head">
-      <span class="ws-label" :title="labelTitle" @click.stop="onLabelClick"><Icon name="folder-tree" :size="13" />文件</span>
-      <FileTabs class="head-tabs" />
+      <!-- 一级视图分段：文件 / Git 并列。Git 与文件是兄弟节点，不再埋在底部折叠面板里。 -->
+      <div class="view-seg" role="group" aria-label="工作区视图">
+        <button
+          class="view-seg-btn"
+          :class="{ active: filesStore.rightView === 'file' }"
+          title="文件工作区"
+          aria-label="文件工作区"
+          @click="filesStore.setRightView('file')"
+        >
+          <Icon name="folder-tree" :size="13" /> 文件
+        </button>
+        <button
+          class="view-seg-btn"
+          :class="{ active: filesStore.rightView === 'git' }"
+          title="Git 工作区"
+          aria-label="Git 工作区"
+          @click="filesStore.setRightView('git')"
+        >
+          <Icon name="git-branch" :size="13" /> Git
+          <span v-if="gitStore.totalChanges > 0" class="view-badge">{{ gitStore.totalChanges }}</span>
+        </button>
+      </div>
+      <!-- 树折叠/展开：仅文件视图有意义 -->
+      <button
+        v-show="filesStore.rightView === 'file'"
+        class="head-btn icon"
+        :title="treeToggleTitle"
+        :aria-label="treeToggleTitle"
+        @click="onToggleTree"
+      >
+        <Icon :name="filesStore.collapsed ? 'panel-left-open' : 'panel-left-close'" :size="13" />
+      </button>
+      <FileTabs v-show="filesStore.rightView === 'file'" class="head-tabs" />
       <span class="spacer" />
       <!-- 全屏/还原纯图标（expand/shrink 对角箭头），hover title 提示；与收起同款 icon 按钮 -->
       <button
@@ -229,22 +271,66 @@ onBeforeUnmount(() => {
   overflow: hidden;
   min-width: 0;
 }
-/* 「文件」标识 tab：右栏身份，与左侧 sub-tab.active 同款配色。
-   点击翻转文件树折叠（onLabelClick），仅展开态可见 */
-.ws-label {
-  height: 26px;
+/* 一级视图分段「文件 | Git」：独立样式，避免与全局 .seg（base.css / tasks.css
+   两套冲突定义）互相污染。选中态沿用左侧 sub-tab.active 的 accent 配色。 */
+.view-seg {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 14px;
+  gap: 2px;
+  height: 26px;
   margin-left: 6px;
-  border-radius: var(--radius-sm);
-  background: var(--accent-soft-bg);
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 600;
+  padding: 2px;
+  border-radius: var(--radius-md);
+  background: var(--bg-hover);
   flex-shrink: 0;
+}
+.view-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 9px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
   cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.view-seg-btn:hover { color: var(--text-primary); }
+.view-seg-btn.active {
+  background: var(--bg-panel);
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: var(--shadow-card);
+}
+.view-badge {
+  min-width: 15px;
+  padding: 0 4px;
+  border-radius: 7px;
+  background: var(--accent-soft-bg);
+  color: var(--text-primary);
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+}
+/* 收起态也要能看到「有变更」，否则 Git 入口等于隐形 */
+.rail-btn { position: relative; }
+.rail-badge {
+  position: absolute;
+  top: -3px;
+  right: -5px;
+  min-width: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--text-inverse);
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
 }
 /* FileTabs 移到顶行后去掉它自带的底色/底边（由 right-head 统一提供）。
    flex-shrink:1 + min-width:0 必须在展开态就生效：FileTabs 基础样式是

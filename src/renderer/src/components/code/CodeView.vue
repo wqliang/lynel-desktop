@@ -3,6 +3,7 @@ import { computed, watch } from 'vue'
 import Icon from '../Icon.vue'
 import FileTree from './FileTree.vue'
 import FileEditorPanel from './FileEditorPanel.vue'
+import GitChangesPane from './GitChangesPane.vue'
 import BottomPanel from './BottomPanel.vue'
 import { useFilesStore } from '../../stores/files'
 import { useGitStore } from '../../stores/git'
@@ -42,14 +43,16 @@ function onNewFile() {
 function onCollapse() {
   store.collapsed = true
 }
-// 树重新展开的唯一入口是右栏顶部行的「文件」标识 tab（RightWorkspacePane 翻转本 store），
-// 这里不提供第二个展开按钮（左缘竖条 .tree-collapsed 已删）
+// 树重新展开的入口在右栏顶部「文件树折叠/展开」按钮（RightWorkspacePane.onToggleTree）。
+// 顶部「文件 | Git」分段只切换左栏内容：右侧 FileEditorPanel（编辑器 / diff / 提交历史）
+// 始终常驻，所以从 Git 变更清单或历史图点文件能立刻在右侧看到 diff，
+// 且不新增任何 Monaco / DiffEditor 实例。底部面板只剩终端。
 </script>
 
 <template>
   <div class="code-view code-workspace-theme">
     <div class="main-row">
-      <aside v-if="!store.collapsed" class="tree-panel">
+      <aside v-show="!store.collapsed && store.rightView === 'file'" class="tree-panel">
         <div class="panel-toolbar">
           <button class="tool-btn" title="刷新文件树" aria-label="刷新文件树" @click="onRefresh">
             <Icon name="refresh-cw" :size="14" />
@@ -65,7 +68,9 @@ function onCollapse() {
         </div>
         <FileTree :rel-path="''" :depth="0" />
       </aside>
-      <!-- 树折叠态：不渲染任何竖条/展开按钮，编辑器区占满 main-row；展开走右栏「文件」tab -->
+      <!-- Git 视图：左栏换成变更清单，右侧编辑器/diff 区不动 -->
+      <GitChangesPane v-show="store.rightView === 'git'" />
+      <!-- 唯一编辑器宿主：两种一级视图共用，v-show 语义由 FileEditorPanel 内部保证 -->
       <FileEditorPanel />
     </div>
     <BottomPanel

@@ -409,3 +409,16 @@ CodeEditor.vue（唯一 Monaco 实例，不新增、不 dispose）
 - `../../preview/right-panel-before-after.svg` —— 现状 4 层入口 vs 目标顶部并排
 - `../../preview/md-three-modes.svg` —— md 三模式布局与资源约束
 - `../../preview/git-review-workspace.svg` —— Git 审阅工作区目标布局
+
+## 附录 C：实现落地修订（相对评审稿）
+
+评审稿保留原决策记录，此处只记最终实现与之不同的地方：
+
+| 议题 | 评审稿 | 最终实现 |
+|---|---|---|
+| Q3 视图切换粒度 | `CodeView` 主体整体换成 Git 顶层视图 | **只换左栏**（文件树 ↔ `GitChangesPane`），右侧 `FileEditorPanel` 常驻。整块替换会让 `openDiff()` 打开在已被隐藏的编辑器区里，用户看不到 diff |
+| Q7 底部 Git tab | 一期保留跳转入口，二期移除 | **已移除**：顶部「文件 \| Git」分段是唯一入口，底部不再有「Git 工作区」按钮与重复徽章 |
+| Q8 提交历史图 | 收为 Git 工作区底部可切 Tab | **收为 Git 工作区右侧内容区**：`FileEditorPanel` 的第三个 `v-show` 视图（编辑器 / diff / 历史互斥），开关在 `GitChangesPane` 工具条「历史」按钮；`openDiff()` 自动关历史，点历史里的文件能立刻看到 diff。底部面板只剩终端 |
+| 单实例约束 | 不新增 Monaco / DiffEditor | 保持：历史图是纯 DOM，三个视图共用同一个 `FileEditorPanel` 宿主，均为 `v-show` 保活 |
+
+`GitPanel.vue` 的 `view='full'` 分支因此已无调用者，保留作历史实现，后续可单独清理。

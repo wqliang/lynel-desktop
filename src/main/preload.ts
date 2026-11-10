@@ -174,8 +174,13 @@ const api = {
     ipcRenderer.invoke('git:unstage', workDir, paths),
   gitDiscard: (workDir: string, paths: string[]) =>
     ipcRenderer.invoke('git:discard', workDir, paths),
-  gitCommit: (workDir: string, message: string) => ipcRenderer.invoke('git:commit', workDir, message),
-  gitRemoteOp: (workDir: string, op: string) => ipcRenderer.invoke('git:remoteOp', workDir, op),
+  gitCommit: (workDir: string, message: string, amend?: boolean) =>
+    ipcRenderer.invoke('git:commit', workDir, message, amend),
+  gitRemoteOp: (
+    workDir: string,
+    op: string,
+    opts?: { rebase?: boolean; ffOnly?: boolean; forceWithLease?: boolean; timeoutMs?: number },
+  ) => ipcRenderer.invoke('git:remoteOp', workDir, op, opts),
   gitFileAtRev: (workDir: string, rev: string, relPath: string) =>
     ipcRenderer.invoke('git:fileAtRev', workDir, rev, relPath),
   gitLogGraph: (workDir: string, max?: number) =>
@@ -201,6 +206,12 @@ const api = {
     ipcRenderer.invoke('git:blame', workDir, relPath),
   gitResetTo: (workDir: string, hash: string, mode: 'soft' | 'mixed' | 'hard') =>
     ipcRenderer.invoke('git:resetTo', workDir, hash, mode),
+  gitWorktreeList: (workDir: string) => ipcRenderer.invoke('git:worktreeList', workDir),
+  gitWorktreeAdd: (workDir: string, opts: { path: string; branch?: string; createBranch?: boolean; startPoint?: string }) =>
+    ipcRenderer.invoke('git:worktreeAdd', workDir, opts),
+  gitWorktreeRemove: (workDir: string, target: string, force?: boolean) =>
+    ipcRenderer.invoke('git:worktreeRemove', workDir, target, force),
+  gitWorktreePrune: (workDir: string) => ipcRenderer.invoke('git:worktreePrune', workDir),
   gitWatch: (workDir: string) => ipcRenderer.invoke('git:watch', workDir),
   gitUnwatch: (workDir: string) => ipcRenderer.invoke('git:unwatch', workDir),
 

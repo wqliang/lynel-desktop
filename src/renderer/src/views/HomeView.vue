@@ -227,6 +227,18 @@
                   <button class="sub-tab" :class="{ active: activeSubTab === 'trace' }" @click="setSubTab('trace')">
                     <Icon name="activity" :size="13" /> Trace
                   </button>
+                  <!-- 「右栏」常驻入口：无论右栏展开/收起、当前是文件还是 Git 视图都在。
+                       点一下必定回到文件面板（文件树 + 编辑器），避免上次停在 Git 视图或
+                       提交历史后，重启进来找不到打开文件面板的地方。
+                       纯图标不占标签行宽度，用途交给 title / aria-label 说明。 -->
+                  <button
+                    class="sub-tab right-pane-entry"
+                    title="打开文件面板（右栏）"
+                    aria-label="打开右栏文件面板"
+                    @click="files.openFilePane()"
+                  >
+                    <Icon name="panel-right-open" :size="14" />
+                  </button>
                 </div>
                 <div v-show="activeSubTab === 'terminal'" class="sub-pane">
                   <div class="terminal-side">
@@ -250,7 +262,7 @@
                 :maximized="rightFullscreen"
                 @collapse="onCollapseRight"
                 @toggle-fullscreen="rightFullscreen = !rightFullscreen"
-                @expand="files.splitOpen = true"
+                @expand="files.openFilePane()"
               />
             </template>
             <div v-else class="empty"><div class="empty-text">未选择会话</div></div>
@@ -1371,6 +1383,10 @@ watch(
 }
 .sub-tab:hover { background: var(--bg-hover); color: var(--text-primary); }
 .sub-tab.active { background: var(--accent-soft-bg); color: var(--accent); font-weight: 600; }
+/* 「右栏」入口靠标签行右端（紧邻右栏左缘），常驻可见且不被其它 tab 挤掉。
+   纯图标：收窄 padding 只包住图标；它是动作按钮不是 tab，刻意不做 active 态，
+   否则会和「终端」tab 同时高亮。 */
+.right-pane-entry { margin-left: auto; flex-shrink: 0; padding: 0 10px; justify-content: center; }
 .sub-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 /* 会话内容区：左右分栏（左 = 标签行 + 终端/Trace，右 = 文件工作区折叠栏），
    分割从标签行开始、贯通整高 */

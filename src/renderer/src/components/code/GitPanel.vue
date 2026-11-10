@@ -7,6 +7,12 @@ import type { GitBranchInfo, GitFileChange, GitStashEntry } from '../../composab
 import { formatRelTime } from '../../utils/time'
 import { useResizablePanel } from '../../composables/useResizablePanel'
 
+/** view='full'：完整的变更清单 + 历史图（历史形态，默认；现已无调用者）。
+ *  view='log'：Git 工作区右侧内容区专用（FileEditorPanel 的第三个视图），只保留提交历史图 ——
+ *  变更清单 / 提交 / worktree 都在 Git 左栏 GitChangesPane，底部面板只剩终端。
+ *  full 模式的左栏代码暂时保留，避免这次「历史并入 Git 工作区」牵动几百行与既有测试。 */
+const props = withDefaults(defineProps<{ view?: 'full' | 'log' }>(), { view: 'full' })
+
 const git = useGitStore()
 const files = useFilesStore()
 
@@ -168,9 +174,10 @@ async function onDropStash(index: number) {
 </script>
 
 <template>
-  <div class="git-panel">
-    <!-- 左栏：分支条 + 变更列表 + 提交表单。宽度可拖，见 changesWidth -->
-    <div class="col-changes" :style="{ width: changesWidth + 'px' }">
+  <div class="git-panel" :class="{ 'log-only': props.view === 'log' }">
+    <!-- 左栏：分支条 + 变更列表 + 提交表单。宽度可拖，见 changesWidth。
+         log-only（Git 工作区右侧内容区）时整块隐藏，历史图独占宽度。 -->
+    <div v-if="props.view === 'full'" class="col-changes" :style="{ width: changesWidth + 'px' }">
       <!-- 顶部状态条：分支（可点开切换）+ ahead/behind + stash/远程操作 -->
       <div class="git-bar">
         <button class="branch-btn" :title="git.status?.tracking ?? '切换分支'" @click="openBranchMenu">
@@ -286,7 +293,7 @@ async function onDropStash(index: number) {
       </div>
     </div>
 
-    <div class="resize-handle" title="拖拽调整宽度" @mousedown.prevent="onResizeStart" />
+    <div v-if="props.view === 'full'" class="resize-handle" title="拖拽调整宽度" @mousedown.prevent="onResizeStart" />
 
     <!-- 右栏：提交历史图。graphLine 原样用等宽字体渲染，缩进即分支层级 -->
     <div class="col-log">

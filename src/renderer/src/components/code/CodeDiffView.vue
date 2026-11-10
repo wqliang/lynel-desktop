@@ -21,6 +21,9 @@ const notice = ref('') // 二进制 / 超大文件提示
 /** 「无内容可显示」（二进制）时隐藏 diff 宿主区，避免提示条下方还挂着上一次的 diff。
  *  截断提示不置此标志：截断内容仍要显示，提示条只是说明它不完整。 */
 const hostHidden = ref(false)
+/** 当前 diff 的变更处数，以及「上一处/下一处」游标 */
+const changeCount = ref(0)
+let changeIndex = 0
 
 let diffEditor: DiffEditor | null = null
 let originalModel: ITextModel | null = null
@@ -53,11 +56,21 @@ async function ensureEditor(): Promise<DiffEditor | null> {
     theme: currentThemeName,
     automaticLayout: true,
     readOnly: true,
-    renderSideBySide: true,
+    // 左右双栏 / 上下 inline 由 store 偏好驱动，切换时走 updateOptions 不重建实例
+    renderSideBySide: files.diffLayout === 'side',
+    // Monaco 0.56 默认 useInlineViewWhenSpaceIsLimited=true，且断点为 900px：
+    // diff 区宽度 <= 900 时会强制降级成 inline，即使 renderSideBySide=true 也不生效。
+    // 右栏在 Git 视图下被变更清单挤到通常不足 900px，导致「左右双栏」点了没反应。
+    // 这里显式关闭自动降级，布局完全由用户选的 diffLayout 决定。
+    useInlineViewWhenSpaceIsLimited: false,
     // 字号与终端共用一个设置（settings.cfg.terminal.fontSize），默认值与 defaultTerminalConfig 一致
     fontSize: settings.cfg?.terminal.fontSize ?? 14,
     minimap: { enabled: false },
     scrollBeyondLastLine: false,
+  })
+  // Monaco 计算完差异后刷新「变更处数」，供上一处/下一处导航显示
+  diffEditor.onDidUpdateDiff(() => {
+    changeCount.value = diffEditor?.getLineChanges()?.length ?? 0
   })
   return diffEditor
 }
@@ -99,6 +112,7 @@ async function load() {
   if (!req || !wd) return
 
   const seq = ++loadSeq
+  changeIndex = 0
   // 提到入口：首次打开要 settings.load() + 动态 import monaco，期间给用户加载提示
   loading.value = true
   errorMsg.value = ''
@@ -203,6 +217,42 @@ watch(() => files.activeView, async (v) => {
   requestAnimationFrame(() => diffEditor?.layout())
 })
 
+/** 把当前布局真正应用到 Monaco。updateOptions 是合并语义，不重建编辑器 / model。 */
+function applyLayout(layout: 'side' | 'inline') {
+  diffEditor?.updateOptions({
+    renderSideBySide: layout === 'side',
+    // 重申关闭自动降级：让 HMR 后仍活着的旧实例在下一次切换时也自愈
+    useInlineViewWhenSpaceIsLimited: false,
+  })
+}
+
+/** 按钮入口：除了写偏好，还强制重新 apply 一次。
+ *  只靠 watch 有个死角 —— 若偏好已是 side 而实例仍是 inline（例如 HMR 保留了旧实例），
+ *  再点「左右双栏」时值没变、watch 不触发，用户会觉得「点了没反应」。 */
+function setLayout(layout: 'side' | 'inline') {
+  files.setDiffLayout(layout)
+  applyLayout(layout)
+}
+
+// 响应外部状态变化（切会话恢复现场、其它入口改偏好）
+watch(() => files.diffLayout, (layout) => {
+  applyLayout(layout)
+})
+
+/** 跳到上一处 / 下一处变更。getLineChanges 返回的 modified 行号在 inline 模式下同样有效。 */
+function gotoChange(step: 1 | -1) {
+  const changes = diffEditor?.getLineChanges() ?? []
+  if (changes.length === 0) return
+  changeCount.value = changes.length
+  changeIndex = (changeIndex + step + changes.length) % changes.length
+  const c = changes[changeIndex]
+  const line = c.modifiedStartLineNumber || c.originalStartLineNumber
+  const modified = diffEditor?.getModifiedEditor()
+  modified?.revealLineInCenter(line)
+  modified?.setPosition({ lineNumber: line, column: 1 })
+  modified?.focus()
+}
+
 watch(() => settings.cfg?.terminal.theme, () => { void syncTheme() })
 
 onBeforeUnmount(() => {
@@ -228,6 +278,34 @@ void (async () => {
       </span>
       <span class="diff-rev">{{ files.diffRequest?.left }} ↔ {{ files.diffRequest?.label }}</span>
       <span class="bar-spacer" />
+      <!-- 上下 inline / 左右双栏：同一个 DiffEditor，updateOptions 切换 -->
+      <div class="diff-seg" role="group" aria-label="diff 布局">
+        <button
+          class="diff-seg-btn"
+          :class="{ active: files.diffLayout === 'inline' }"
+          title="上下（统一视图）"
+          aria-label="上下统一视图"
+          @click="setLayout('inline')"
+        >
+          <Icon name="rows-2" :size="13" />
+        </button>
+        <button
+          class="diff-seg-btn"
+          :class="{ active: files.diffLayout === 'side' }"
+          title="左右双栏"
+          aria-label="左右双栏视图"
+          @click="setLayout('side')"
+        >
+          <Icon name="columns-2" :size="13" />
+        </button>
+      </div>
+      <span class="change-count">{{ changeCount }} 处</span>
+      <button class="bar-btn" title="上一处变更" aria-label="上一处变更" :disabled="changeCount === 0" @click="gotoChange(-1)">
+        <Icon name="chevron-up" :size="13" />
+      </button>
+      <button class="bar-btn" title="下一处变更" aria-label="下一处变更" :disabled="changeCount === 0" @click="gotoChange(1)">
+        <Icon name="chevron-down" :size="13" />
+      </button>
       <button class="bar-btn" title="关闭 diff" @click="files.closeDiff()">
         <Icon name="close" :size="13" />
       </button>
@@ -277,6 +355,23 @@ void (async () => {
   cursor: pointer;
 }
 .bar-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+.bar-btn:disabled { opacity: .4; cursor: not-allowed; }
+.diff-seg {
+  display: inline-flex; gap: 2px; padding: 2px;
+  border-radius: var(--radius-md); background: var(--bg-hover);
+}
+.diff-seg-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 20px; padding: 0;
+  border: none; border-radius: 5px; background: transparent;
+  color: var(--text-tertiary); cursor: pointer;
+}
+.diff-seg-btn:hover { color: var(--text-primary); }
+.diff-seg-btn.active {
+  background: var(--bg-panel); color: var(--accent);
+  box-shadow: var(--shadow-card);
+}
+.change-count { font-size: 10px; color: var(--text-tertiary); white-space: nowrap; }
 .diff-hint {
   padding: 8px 12px;
   font-size: var(--fs-caption);

@@ -914,3 +914,112 @@ describe('git reset', () => {
     expect(res.ok).toBe(false);
   });
 });
+
+// —— Git 工作区优化新增能力：amend / 远程选项 / worktree ——
+// 与上面的用例一致：真实临时 git 仓库，不 mock（mock 掉的正是被测对象）。
+describe('git amend / 远程选项 / worktree', () => {
+  let repo: string;
+  let wtPath: string;
+
+  beforeAll(() => {
+    repo = makeRepo();
+    wtPath = `${repo}-wt`;
+  });
+
+  afterAll(async () => {
+    // 若还有登记中的 worktree，先让 git 自己摘掉再删目录
+    try {
+      const { worktreeRemove } = await import('../../src/main/git.js');
+      await worktreeRemove(repo, wtPath, true);
+    } catch { /* 未创建过则忽略 */ }
+    if (fs.existsSync(wtPath)) fs.rmSync(wtPath, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  it('commit --amend 修改最近一次提交，不新增提交数', async () => {
+    const { commit, stage } = await import('../../src/main/git.js');
+    // makeRepo 的初始提交是 --allow-empty，直接 amend 会让提交保持为空而被 git 拒绝；
+    // 先落一个真实文件，模拟用户修改上次提交说明的场景。
+    fs.writeFileSync(path.join(repo, 'amend.txt'), 'v1\n');
+    expect((await stage(repo, ['amend.txt'])).ok).toBe(true);
+    expect((await commit(repo, 'first real commit')).ok).toBe(true);
+    const count = () => Number(
+      execFileSync('git', ['rev-list', '--count', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim(),
+    );
+    const before = count();
+    expect((await commit(repo, 'amended message', true)).ok).toBe(true);
+    expect(count()).toBe(before);
+    const msg = execFileSync('git', ['log', '-1', '--format=%s'], { cwd: repo, encoding: 'utf8' }).trim();
+    expect(msg).toBe('amended message');
+  });
+
+  it('remoteOp 带选项时仍返回结构化错误，不抛未捕获异常', async () => {
+    const { remoteOp } = await import('../../src/main/git.js');
+    const res = await remoteOp(repo, 'pull', { rebase: true, ffOnly: true, timeoutMs: 5000 });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.length).toBeGreaterThan(0);
+  });
+
+  it('worktreeList 至少包含主工作树并标记 current', async () => {
+    const { worktreeList } = await import('../../src/main/git.js');
+    const res = await worktreeList(repo);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.length).toBeGreaterThanOrEqual(1);
+    expect(res.data.some((w) => w.current)).toBe(true);
+    expect(res.data[0].head).toMatch(/^[0-9a-f]{7,40}$/);
+  });
+
+  it('worktreeAdd 拒绝把工作树建在仓库内部', async () => {
+    const { worktreeAdd } = await import('../../src/main/git.js');
+    const res = await worktreeAdd(repo, { path: path.join(repo, 'nested') });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('内部');
+  });
+
+  it('worktreeAdd -b 新建分支后 list 出现该工作树，且不是 current', async () => {
+    const { worktreeAdd, worktreeList } = await import('../../src/main/git.js');
+    const added = await worktreeAdd(repo, {
+      path: wtPath,
+      branch: 'feature-wt',
+      createBranch: true,
+    });
+    expect(added.ok).toBe(true);
+    const list = await worktreeList(repo);
+    expect(list.ok).toBe(true);
+    if (!list.ok) return;
+    const hit = list.data.find((w) => w.branch === 'feature-wt');
+    expect(hit).toBeTruthy();
+    expect(hit?.current).toBe(false);
+    expect(fs.existsSync(path.join(wtPath, '.git'))).toBe(true);
+  });
+
+  it('linked worktree 里 .git 是文件：watchGit 仍能建立并回收', async () => {
+    const { watchGit, unwatchGit, worktreeList } = await import('../../src/main/git.js');
+    const list = await worktreeList(repo);
+    if (!list.ok || !list.data.some((w) => w.branch === 'feature-wt')) return;
+    // .git 为文件正是旧实现 `${workDir}/.git` 失效的场景
+    expect(fs.statSync(path.join(wtPath, '.git')).isFile()).toBe(true);
+    await expect(watchGit(wtPath)).resolves.toBeUndefined();
+    await unwatchGit(wtPath);
+  });
+
+  it('worktreeRemove 拒绝移除当前工作树，但可以移除 linked worktree', async () => {
+    const { worktreeRemove, worktreeList } = await import('../../src/main/git.js');
+    const refused = await worktreeRemove(repo, repo);
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.error).toContain('当前');
+
+    const removed = await worktreeRemove(repo, wtPath);
+    expect(removed.ok).toBe(true);
+    const list = await worktreeList(repo);
+    expect(list.ok).toBe(true);
+    if (!list.ok) return;
+    expect(list.data.some((w) => w.branch === 'feature-wt')).toBe(false);
+  });
+
+  it('worktreePrune 在无失效元数据时也返回 ok', async () => {
+    const { worktreePrune } = await import('../../src/main/git.js');
+    expect((await worktreePrune(repo)).ok).toBe(true);
+  });
+});

@@ -92,10 +92,11 @@ describe('RightWorkspacePane', () => {
     document.body.style.userSelect = ''
   })
 
-  it('渲染文件标识 tab、全屏/收起按钮与 CodeView', async () => {
+  it('渲染「文件 | Git」并排分段、全屏/收起按钮与 CodeView', async () => {
     const wrapper = mountPane(1200)
     await nextTick()
-    expect(wrapper.find('.ws-label').text()).toContain('文件')
+    expect(wrapper.find('.view-seg-btn[aria-label="文件工作区"]').text()).toContain('文件')
+    expect(wrapper.find('.view-seg-btn[aria-label="Git 工作区"]').text()).toContain('Git')
     expect(wrapper.find('.head-btn[title="全屏"]').exists()).toBe(true)
     expect(wrapper.find('.head-btn[aria-label="收起右栏"]').exists()).toBe(true)
     expect(wrapper.find('.code-view-stub').exists()).toBe(true)
@@ -138,6 +139,17 @@ describe('RightWorkspacePane', () => {
     expect((wrapper.element as HTMLElement).style.maxWidth).toBe('')
   })
 
+  it('收起态右缘按钮只显示图标：不渲染「右栏」文字，靠 title 说明用途', async () => {
+    const wrapper = mountPane(1200, { visible: false })
+    await nextTick()
+    const btn = wrapper.find('.expand-rail .head-btn[aria-label="展开右栏"]')
+    expect(btn.text()).not.toContain('右栏')
+    expect(btn.find('[data-icon="panel-right-open"]').exists()).toBe(true)
+    expect(btn.attributes('title')).toContain('文件面板')
+    // 保留边框（不带 .icon 定宽类），纯图标也能看清是个可点按钮
+    expect(btn.classes()).not.toContain('icon')
+  })
+
   it('收起态点右缘展开按钮 → emit expand', async () => {
     const wrapper = mountPane(1200, { visible: false })
     await nextTick()
@@ -145,19 +157,24 @@ describe('RightWorkspacePane', () => {
     expect(wrapper.emitted('expand')).toHaveLength(1)
   })
 
-  it('展开态无展开按钮（收起按钮在场），点「文件」标识 tab → 翻转文件树折叠态，且不 emit expand', async () => {
+  it('展开态点树折叠按钮 → 双向翻转折叠态；点 Git 分段 → 切一级视图并展开右栏', async () => {
     const store = useFilesStore()
     store.collapsed = false
     const wrapper = mountPane(1200, { visible: true })
     await nextTick()
     expect(wrapper.find('.expand-rail').exists()).toBe(false)
-    await wrapper.find('.ws-label').trigger('click')
+    await wrapper.find('.head-btn[aria-label="折叠文件树"]').trigger('click')
     expect(store.collapsed).toBe(true)
     expect(wrapper.emitted('expand')).toBeUndefined()
-    // 再点一次翻回来（双向切换）
-    await wrapper.find('.ws-label').trigger('click')
+    await wrapper.find('.head-btn[aria-label="展开文件树"]').trigger('click')
     expect(store.collapsed).toBe(false)
     expect(wrapper.emitted('expand')).toBeUndefined()
+
+    await wrapper.find('.view-seg-btn[aria-label="Git 工作区"]').trigger('click')
+    expect(store.rightView).toBe('git')
+    expect(store.splitOpen).toBe(true)
+    // Git 视图下文件树折叠按钮与文件 tabs 都不应占位
+    expect(wrapper.find('.file-tabs-stub').isVisible()).toBe(false)
   })
 
   it('展开态点文件 tabs 区 → 不翻转文件树折叠态、不 emit（现状回归）', async () => {
@@ -170,15 +187,15 @@ describe('RightWorkspacePane', () => {
     expect(wrapper.emitted('expand')).toBeUndefined()
   })
 
-  it('「文件」tab hover 提示随树开合变化（收起态顶部行已隐藏，无此 tab）', async () => {
+  it('树折叠按钮 hover 提示随树开合变化', async () => {
     const store = useFilesStore()
     store.collapsed = false
     const wrapper = mountPane(1200, { visible: true })
     await nextTick()
-    expect(wrapper.find('.ws-label').attributes('title')).toBe('折叠文件树')
+    expect(wrapper.find('.head-btn[aria-label="折叠文件树"]').attributes('title')).toBe('折叠文件树')
     store.collapsed = true
     await nextTick()
-    expect(wrapper.find('.ws-label').attributes('title')).toBe('展开文件树')
+    expect(wrapper.find('.head-btn[aria-label="展开文件树"]').attributes('title')).toBe('展开文件树')
   })
 
   it('无存量宽度时首展开 = 容器 50%（容器 1200 → 600）', async () => {

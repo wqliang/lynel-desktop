@@ -1,5 +1,5 @@
 import { computed, ref } from 'vue'
-import { defineStore } from 'pinia'
+import { acceptHMRUpdate, defineStore } from 'pinia'
 import {
   GitStatus,
   GitStage,
@@ -21,11 +21,18 @@ import {
   GitWatch,
   GitUnwatch,
   GitChanged,
+  GitWorktreeList,
+  GitWorktreeAdd,
+  GitWorktreeRemove,
+  GitWorktreePrune,
   type GitBranchInfo,
   type GitCommitInfo,
   type GitGraphCommit,
+  type GitRemoteOptions,
   type GitStashEntry,
   type GitStatusResult,
+  type GitWorktreeAddOptions,
+  type GitWorktreeInfo,
 } from '../composables/useElectron'
 import { pushToast } from '../composables/useToast'
 
@@ -47,6 +54,8 @@ export const useGitStore = defineStore('git', () => {
   const branches = ref<GitBranchInfo[]>([])
   /** stash 列表，最新在前 */
   const stashes = ref<GitStashEntry[]>([])
+  /** git worktree 列表（当前 workDir 所在的那条会标 current） */
+  const worktrees = ref<GitWorktreeInfo[]>([])
 
   const totalChanges = computed(() => {
     const s = status.value
@@ -153,11 +162,24 @@ export const useGitStore = defineStore('git', () => {
     }
   }
 
-  /** 刷新面板的全部数据：变更状态 + 提交历史图 + 分支 + stash。
+  /** 拉取 worktree 列表。新建/移除工作树后由对应 action 显式刷新。 */
+  async function loadWorktrees(): Promise<void> {
+    const wd = workDir.value
+    if (!wd) { worktrees.value = []; return }
+    try {
+      const res = await GitWorktreeList(wd)
+      if (workDir.value !== wd) return
+      if (res.ok) worktrees.value = res.data
+    } catch {
+      // 静默，保留上一次结果
+    }
+  }
+
+  /** 刷新面板的全部数据：变更状态 + 提交历史图 + 分支 + stash + worktree。
    *  它们由同一批 .git 变化驱动（提交 / checkout / 切分支 / stash），
    *  合并成一个入口，任何一处改动都不会漏刷。 */
   async function refreshAll(): Promise<void> {
-    await Promise.all([refresh(), loadLog(), loadBranches(), loadStashes()])
+    await Promise.all([refresh(), loadLog(), loadBranches(), loadStashes(), loadWorktrees()])
   }
 
   // detailSeq：连点不同提交时，只有最后一次发起的详情才作数
@@ -212,6 +234,7 @@ export const useGitStore = defineStore('git', () => {
     commitDetail.value = null
     branches.value = []
     stashes.value = []
+    worktrees.value = []
     error.value = ''
     // 卸载「真正挂着的那一个」，而不是当前 workDir
     if (watchedDir && watchedDir !== wd) {
@@ -231,26 +254,32 @@ export const useGitStore = defineStore('git', () => {
     if (seq === sessionSeq) await refreshAll()
   }
 
-  /** 统一包装「执行一次写操作 + 刷新 + 失败提示」 */
-  async function withOp(name: string, fn: () => Promise<{ ok: boolean; error?: string }>) {
+  /** 统一包装「执行一次写操作 + 刷新 + 失败提示」。
+   *  返回是否成功：提交并推送、批量操作这类组合动作需要据此决定是否继续下一步。 */
+  async function withOp(
+    name: string,
+    fn: () => Promise<{ ok: boolean; error?: string }>,
+  ): Promise<boolean> {
     // 任何写操作进行中都不允许再发起另一个（防连点重复提交）
-    if (busyOp.value) return
+    if (busyOp.value) return false
     // 没有工作目录就没有仓库可操作。必须在这里拦住：主进程侧 empty baseDir 会被
     // simple-git 当作 falsy 而回退到 process.cwd()，那会把变更写进应用自己的仓库。
     if (!workDir.value) {
       pushToast({ level: 'error', source: 'git', message: '未选择会话，无法执行 Git 操作' })
-      return
+      return false
     }
     busyOp.value = name
     try {
       const res = await fn()
       if (!res.ok) {
         pushToast({ level: 'error', source: 'git', message: res.error ?? `${name} 失败` })
-        return
+        return false
       }
       await refreshAll()
+      return true
     } catch (e: any) {
       pushToast({ level: 'error', source: 'git', message: e?.message ?? String(e) })
+      return false
     } finally {
       busyOp.value = null
     }
@@ -260,21 +289,29 @@ export const useGitStore = defineStore('git', () => {
   const unstage = (paths: string[]) => withOp('取消暂存', () => GitUnstage(workDir.value, paths))
   const discard = (paths: string[]) => withOp('丢弃', () => GitDiscard(workDir.value, paths))
 
-  const commit = (message: string) =>
+  const commit = (message: string, amend = false) =>
     withOp('提交', async () => {
-      const res = await GitCommit(workDir.value, message)
+      const res = await GitCommit(workDir.value, message, amend)
       if (!res.ok) return res
-      pushToast({ level: 'info', source: 'git', message: '提交成功' })
+      pushToast({ level: 'info', source: 'git', message: amend ? '已修改最近一次提交' : '提交成功' })
       return res
     })
 
-  const runRemoteOp = (op: 'fetch' | 'pull' | 'push') =>
+  const runRemoteOp = (op: 'fetch' | 'pull' | 'push', opts?: GitRemoteOptions) =>
     withOp(op, async () => {
-      const res = await GitRemoteOp(workDir.value, op)
+      const res = await GitRemoteOp(workDir.value, op, opts)
       if (!res.ok) return res
       pushToast({ level: 'info', source: 'git', message: res.summary })
       return res
     })
+
+  // —— worktree ——
+  const addWorktree = (opts: GitWorktreeAddOptions) =>
+    withOp('新建工作树', () => GitWorktreeAdd(workDir.value, opts))
+  const removeWorktree = (target: string, force = false) =>
+    withOp('移除工作树', () => GitWorktreeRemove(workDir.value, target, force))
+  const pruneWorktrees = () =>
+    withOp('清理工作树', () => GitWorktreePrune(workDir.value))
 
   // —— 分支 ——
   const createBranch = (name: string) =>
@@ -309,20 +346,33 @@ export const useGitStore = defineStore('git', () => {
     withOp('丢弃暂存', () => GitStashDrop(workDir.value, index))
 
   // git 内部状态变化（提交、外部 checkout 等）→ 自动刷新
-  // 这里有意不保存 GitChanged 返回的退订函数：Pinia setup store 在应用生命周期内
-  // 是单例、只创建一次，不存在多次订阅导致的重复回调或泄漏。
-  GitChanged((wd: string) => {
+  // 开发态 HMR 会重跑 setup，旧闭包里的退订函数会丢失，故保存到 hot.data：
+  // 重新订阅前先退订，否则每次热更新都叠加一个 git:changed 监听，
+  // 一次提交会触发多次 refreshAll。
+  const hotData = import.meta.hot?.data as
+    | { gitChangedCleanup?: (() => void) | null }
+    | undefined
+  hotData?.gitChangedCleanup?.()
+  const gitChangedCleanup = GitChanged((wd: string) => {
     if (wd === workDir.value) void refreshAll()
   })
+  if (hotData) hotData.gitChangedCleanup = gitChangedCleanup
 
   return {
     workDir, status, loading, error, busyOp,
     log, logLoading, expandedHash, commitDetail, detailLoading,
-    branches, stashes,
+    branches, stashes, worktrees,
     totalChanges, hasStaged,
-    setSession, refresh, refreshAll, loadLog, toggleCommitDetail,
+    setSession, refresh, refreshAll, loadLog, loadWorktrees, toggleCommitDetail,
     stage, unstage, discard, commit, runRemoteOp,
+    addWorktree, removeWorktree, pruneWorktrees,
     createBranch, checkoutBranch, deleteBranch, resetTo,
     stashChanges, popStash, dropStash,
   }
 })
+
+// 与 files store 同理：setup store 模块热更新需 patch 现有实例，
+// 否则新增的 action（worktree / amend 等）在旧实例上不存在。
+if (import.meta.hot) {
+  import.meta.hot.accept(acceptHMRUpdate(useGitStore, import.meta.hot))
+}

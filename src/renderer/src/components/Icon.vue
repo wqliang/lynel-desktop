@@ -26,6 +26,7 @@ import {
   ChevronsDownUp,
   CircleQuestionMark,
   Columns2,
+  Rows2,
   Cloud,
   Copy,
   CornerDownLeft,
@@ -109,8 +110,10 @@ const icons: Record<string, unknown> = {
   'chevron-down': ChevronDown,
   'chevron-up': ChevronUp,
   'chevrons-down-up': ChevronsDownUp,
-  // md 三模式的「编辑 + 预览」分栏视图
+  // md 三模式的「编辑 + 预览」分栏视图 / diff 的左右双栏
   'columns-2': Columns2,
+  // diff 的上下（inline / unified）视图
+  'rows-2': Rows2,
   plus: Plus,
   minus: Minus,
   copy: Copy,

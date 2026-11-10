@@ -31,6 +31,20 @@ describe('右栏单宿主不变量', () => {
     expect(homeSrc.includes('sub-expand'), 'sub-expand 图标入口必须已删除').toBe(false)
   })
 
+  it('「右栏」常驻入口：sub-tabs 行纯图标按钮，展开统一走 openFilePane', () => {
+    // 右栏入口不能只在收起态出现：上次停在 Git 视图/提交历史时，重启后右栏
+    // 自动展开成变更清单，用户会以为「打开文件面板的按钮不见了」。
+    const start = homeSrc.indexOf('class="sub-tab right-pane-entry"')
+    const entry = start >= 0 ? homeSrc.slice(start, homeSrc.indexOf('</button>', start)) : ''
+    expect(entry, 'sub-tabs 行必须有常驻「右栏」入口').not.toBe('')
+    expect(entry).toContain('panel-right-open')
+    expect(entry, '只显示图标，不渲染「右栏」文字').not.toContain('<span>右栏</span>')
+    expect(entry, '纯图标靠 title / aria-label 说明用途').toContain('title="打开文件面板（右栏）"')
+    expect(entry).toContain('aria-label="打开右栏文件面板"')
+    expect(homeSrc.match(/files\.openFilePane\(\)/g)?.length, '按钮与 @expand 两处都要走 openFilePane').toBe(2)
+    expect(homeSrc.includes('@expand="files.splitOpen = true"'), '旧展开逻辑不能把视图留在 Git').toBe(false)
+  })
+
   it('FileEditorPanel 全应用只有一个挂载点，且不再内含 FileTabs', () => {
     const inCodeView = codeViewSrc.match(/<FileEditorPanel\b/g)?.length ?? 0
     expect(inCodeView, `CodeView 内 FileEditorPanel 挂载数应为 1，实际 ${inCodeView}`).toBe(1)

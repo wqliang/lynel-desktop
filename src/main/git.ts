@@ -261,30 +261,81 @@ export async function discard(workDir: string, relPaths: string[]): Promise<GitO
 /** 与 files.ts 保持一致的单文件文本上限；超过则截断标记 */
 export const MAX_TEXT_SIZE = 1024 * 1024;
 
-export async function commit(workDir: string, message: string): Promise<GitOpResult> {
+export async function commit(
+  workDir: string,
+  message: string,
+  amend = false,
+): Promise<GitOpResult> {
   const msg = message.trim();
   if (!msg) return { ok: false, error: '提交说明不能为空' };
-  return runOp(() => gitFor(workDir).commit(msg));
+  // 用 raw argv 数组而非 simple-git 的 commit() 重载：--amend 的位置在不同版本里
+  // 参数位不同，raw 最可控，且全程不拼 shell。
+  return runOp(() => gitFor(workDir).raw([
+    'commit', ...(amend ? ['--amend'] : []), '-m', msg,
+  ]));
 }
 
-/** fetch / pull / push。耗时可能较长，调用方负责禁用按钮防重复触发。 */
+/** 远程操作选项。全部映射到显式 argv，不提供裸 --force。 */
+export interface GitRemoteOptions {
+  /** pull --rebase */
+  rebase?: boolean;
+  /** pull --ff-only */
+  ffOnly?: boolean;
+  /** push --force-with-lease（UI 必须二次确认） */
+  forceWithLease?: boolean;
+  /** 超时毫秒，默认 60s；测试可传小值 */
+  timeoutMs?: number;
+}
+const REMOTE_TIMEOUT_MS = 60_000;
+
+/** 给远程操作加超时。注意 git 子进程本身不会被强杀，但 UI 的 busy 状态能解除，
+ *  避免网络异常时按钮永久禁用；超时后迟到的结果只会被渲染层的 in-flight 序号丢弃。 */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`Git 远程操作超时（${Math.round(ms / 1000)} 秒），请检查网络或远端配置`)),
+      ms,
+    );
+    p.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
+/** fetch / pull / push。
+ *  超时是主进程侧兜底；渲染层另有 busyOp 防连点。 */
 export async function remoteOp(
   workDir: string,
   op: 'fetch' | 'pull' | 'push',
+  opts: GitRemoteOptions = {},
 ): Promise<{ ok: true; summary: string } | { ok: false; error: string }> {
+  const timeoutMs = opts.timeoutMs ?? REMOTE_TIMEOUT_MS;
   try {
     const g = gitFor(workDir);
+    let args: string[];
     if (op === 'fetch') {
-      const r = await g.fetch();
-      return { ok: true, summary: `fetch 完成（${r.remote ?? ''}）` };
+      args = ['fetch'];
+    } else if (op === 'pull') {
+      args = ['pull'];
+      if (opts.rebase) args.push('--rebase');
+      if (opts.ffOnly) args.push('--ff-only');
+    } else {
+      args = ['push'];
+      if (opts.forceWithLease) args.push('--force-with-lease');
+      // 首次推送自动建立 upstream：没有 tracking 时显式 -u origin <当前分支>。
+      // 否则用户得自己去终端敲一次 git push -u。
+      const st = await withTimeout(g.status(), timeoutMs);
+      if (!st.tracking && st.current) {
+        const remotes = await withTimeout(g.getRemotes(), timeoutMs);
+        const remote = remotes[0]?.name ?? 'origin';
+        args.push('-u', remote, st.current);
+      }
     }
-    if (op === 'pull') {
-      const r = await g.pull();
-      const changed = r.summary?.changes ?? 0;
-      return { ok: true, summary: `pull 完成，更新 ${changed} 个文件` };
-    }
-    const r = await g.push();
-    return { ok: true, summary: `push 完成（${r.pushed?.length ?? 0} 个分支）` };
+    const out = await withTimeout(g.raw(args), timeoutMs);
+    const tail = typeof out === 'string' && out.trim() ? `：${out.trim().slice(0, 140)}` : '';
+    const label = op === 'fetch' ? 'fetch' : op === 'pull' ? 'pull' : 'push';
+    return { ok: true, summary: `${label} 完成${tail}` };
   } catch (err: any) {
     return { ok: false, error: err?.message || String(err) };
   }
@@ -778,32 +829,164 @@ export async function blameFile(
   }
 }
 
+// —— Git Worktree ——
+/** `git worktree list --porcelain` 的一条记录。路径统一为绝对路径。 */
+export interface GitWorktreeInfo {
+  path: string;
+  head: string;
+  branch: string | null;
+  detached: boolean;
+  locked: boolean;
+  prunable: boolean;
+  /** 是否是调用方当前所在的 workDir（运行中会话不允许切到别的 worktree） */
+  current: boolean;
+}
+
+/** Windows 上 mkdtempSync 可能给出 8.3 短路径（JOHNNY~1），而 git worktree list
+ *  --porcelain 输出的是长路径，直接字符串比较会误判成两个不同目录。
+ *  realpathSync.native 能把短名解析回长名；目标路径尚不存在时回退 resolve。 */
+function canonical(p: string): string {
+  const abs = path.resolve(p);
+  try { return fs.realpathSync.native(abs); } catch { return abs; }
+}
+
+function samePath(a: string, b: string): boolean {
+  const x = canonical(a);
+  const y = canonical(b);
+  return process.platform === 'win32' ? x.toLowerCase() === y.toLowerCase() : x === y;
+}
+
+export async function worktreeList(
+  workDir: string,
+): Promise<{ ok: true; data: GitWorktreeInfo[] } | { ok: false; error: string }> {
+  try {
+    const out = await gitFor(workDir).raw(['worktree', 'list', '--porcelain']);
+    const data: GitWorktreeInfo[] = [];
+    for (const block of String(out).split(/\r?\n\r?\n/)) {
+      let wtPath = '';
+      let head = '';
+      let branch: string | null = null;
+      let detached = false;
+      let locked = false;
+      let prunable = false;
+      for (const line of block.split(/\r?\n/).filter(Boolean)) {
+        if (line.startsWith('worktree ')) wtPath = line.slice(9).trim();
+        else if (line.startsWith('HEAD ')) head = line.slice(5).trim();
+        else if (line.startsWith('branch ')) branch = line.slice(7).trim().replace(/^refs\/heads\//, '');
+        else if (line === 'detached') detached = true;
+        else if (line.startsWith('locked')) locked = true;
+        else if (line.startsWith('prunable')) prunable = true;
+      }
+      if (!wtPath) continue;
+      data.push({
+        path: wtPath, head, branch, detached, locked, prunable,
+        current: samePath(wtPath, workDir),
+      });
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+export interface GitWorktreeAddOptions {
+  /** 新工作树的绝对路径 */
+  path: string;
+  /** 要 checkout 的分支；createBranch 为 true 时会新建该分支 */
+  branch?: string;
+  createBranch?: boolean;
+  /** 起始点（默认 HEAD） */
+  startPoint?: string;
+}
+
+export function worktreeAdd(workDir: string, opts: GitWorktreeAddOptions): Promise<GitOpResult> {
+  return runOp(async () => {
+    const target = path.resolve(opts.path);
+    const bases = [canonical(workDir), path.resolve(workDir)];
+    const inside = samePath(target, workDir) || bases.some(
+      (base) => target.startsWith(base + path.sep) || canonical(target).startsWith(base + path.sep),
+    );
+    if (inside) throw new Error('worktree 不能建在当前仓库目录内部');
+    const args = ['worktree', 'add'];
+    if (opts.createBranch && opts.branch?.trim()) args.push('-b', opts.branch.trim());
+    args.push(target);
+    if (opts.startPoint?.trim()) args.push(opts.startPoint.trim());
+    await gitFor(workDir).raw(args);
+  });
+}
+
+/** 只允许移除 git 已登记的 worktree，且不允许移除当前会话正在使用的工作树。 */
+export function worktreeRemove(
+  workDir: string,
+  target: string,
+  force = false,
+): Promise<GitOpResult> {
+  return runOp(async () => {
+    if (samePath(target, workDir)) throw new Error('不能移除当前正在使用的工作树');
+    const list = await worktreeList(workDir);
+    if (!list.ok) throw new Error(list.error);
+    const hit = list.data.find((w) => samePath(w.path, target));
+    if (!hit) throw new Error(`不是已登记的工作树：${target}`);
+    await gitFor(workDir).raw(['worktree', 'remove', ...(force ? ['--force'] : []), hit.path]);
+  });
+}
+
+export function worktreePrune(workDir: string): Promise<GitOpResult> {
+  return runOp(() => gitFor(workDir).raw(['worktree', 'prune']));
+}
+
 // —— .git 变更监听 ——
 // files.ts 的文件树 watcher 把 .git 放在 IGNORED_DIRS 里，看不到 git 内部状态变化
 // （提交、外部 checkout、切换分支），Git 面板必须自己盯 HEAD / index / refs。
 // 刻意不监 objects/ 与 logs/：写入极频繁且与 UI 展示无关。
 const watchers = new Map<string, FSWatcher>();
 const debounceTimers = new Map<string, NodeJS.Timeout>();
+/** 解析 gitdir 是异步的，期间 setSession 可能并发再调一次；用 pending 防重复建 watcher */
+const pendingWatchers = new Set<string>();
 
-export function watchGit(workDir: string): void {
-  if (watchers.has(workDir)) return;
-  const gitDir = `${workDir}/.git`;
-  const w = chokidar.watch(
-    [`${gitDir}/HEAD`, `${gitDir}/index`, `${gitDir}/refs`],
-    { ignoreInitial: true, depth: 4 },
-  );
-  w.on('all', () => {
-    const t = debounceTimers.get(workDir);
-    if (t) clearTimeout(t);
-    // 500ms 合帧：一次 git 操作会连写多个文件
-    debounceTimers.set(
-      workDir,
-      setTimeout(() => getBus().emit('git:changed', workDir), 500),
-    );
-  });
-  // 监听 chokidar 异步错误（EMFILE/ENOSPC/权限等），避免走向主进程未捕获异常路径
-  w.on('error', (err) => getLogger().warn(`[git] watcher error ${workDir}: ${err}`));
-  watchers.set(workDir, w);
+export async function watchGit(workDir: string): Promise<void> {
+  if (watchers.has(workDir) || pendingWatchers.has(workDir)) return;
+  pendingWatchers.add(workDir);
+  try {
+    // linked worktree 里 `.git` 是**文件**而非目录，硬编码 `${workDir}/.git` 会让 watcher
+    // 完全失效（操作后面板不自动刷新）。用 rev-parse 拿真实 gitdir：
+    //   --absolute-git-dir → <common>/.git/worktrees/<name>（含本工作树的 HEAD / index）
+    //   --git-common-dir   → <common>/.git（含共享 refs 与主工作树 HEAD）
+    let gitDir = path.join(workDir, '.git');
+    let commonDir = gitDir;
+    try {
+      const g = gitFor(workDir);
+      const abs = String(await g.raw(['rev-parse', '--absolute-git-dir'])).trim();
+      if (abs) gitDir = abs;
+      const common = String(await g.raw(['rev-parse', '--git-common-dir'])).trim();
+      if (common) commonDir = path.isAbsolute(common) ? common : path.resolve(workDir, common);
+    } catch (err) {
+      // 非仓库 / git 不可用：退回旧路径，chokidar 会自己报错但不影响主进程
+      getLogger().warn(`[git] resolve gitdir failed for ${workDir}, fallback .git: ${err}`);
+      commonDir = gitDir;
+    }
+    const targets = [...new Set([
+      path.join(gitDir, 'HEAD'),
+      path.join(gitDir, 'index'),
+      path.join(commonDir, 'HEAD'),
+      path.join(commonDir, 'refs'),
+    ])];
+    const w = chokidar.watch(targets, { ignoreInitial: true, depth: 4 });
+    w.on('all', () => {
+      const t = debounceTimers.get(workDir);
+      if (t) clearTimeout(t);
+      // 500ms 合帧：一次 git 操作会连写多个文件
+      debounceTimers.set(
+        workDir,
+        setTimeout(() => getBus().emit('git:changed', workDir), 500),
+      );
+    });
+    // 监听 chokidar 异步错误（EMFILE/ENOSPC/权限等），避免走向主进程未捕获异常路径
+    w.on('error', (err) => getLogger().warn(`[git] watcher error ${workDir}: ${err}`));
+    watchers.set(workDir, w);
+  } finally {
+    pendingWatchers.delete(workDir);
+  }
 }
 
 /** 关闭全部 git watcher 及其 debounce 定时器，应用退出时调用。
@@ -857,11 +1040,30 @@ export function registerGitIpc(): void {
   );
   ipcMain.handle(
     'git:commit',
-    withWorkDir((workDir: string, message: string) => commit(workDir, message)),
+    withWorkDir((workDir: string, message: string, amend?: boolean) =>
+      commit(workDir, message, amend)),
   );
   ipcMain.handle(
     'git:remoteOp',
-    withWorkDir((workDir: string, op: 'fetch' | 'pull' | 'push') => remoteOp(workDir, op)),
+    withWorkDir((workDir: string, op: 'fetch' | 'pull' | 'push', opts?: GitRemoteOptions) =>
+      remoteOp(workDir, op, opts)),
+  );
+  ipcMain.handle(
+    'git:worktreeList',
+    withWorkDir((workDir: string) => worktreeList(workDir)),
+  );
+  ipcMain.handle(
+    'git:worktreeAdd',
+    withWorkDir((workDir: string, opts: GitWorktreeAddOptions) => worktreeAdd(workDir, opts)),
+  );
+  ipcMain.handle(
+    'git:worktreeRemove',
+    withWorkDir((workDir: string, target: string, force?: boolean) =>
+      worktreeRemove(workDir, target, force)),
+  );
+  ipcMain.handle(
+    'git:worktreePrune',
+    withWorkDir((workDir: string) => worktreePrune(workDir)),
   );
   ipcMain.handle(
     'git:fileAtRev',
@@ -928,7 +1130,7 @@ export function registerGitIpc(): void {
   ipcMain.handle(
     'git:watch',
     withWorkDir(async (workDir: string) => {
-      watchGit(workDir);
+      await watchGit(workDir);
       return { ok: true };
     }),
   );
