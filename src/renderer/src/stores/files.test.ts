@@ -290,3 +290,51 @@ describe('files store · watcher 外部删除清选中', () => {
     expect(store.selectedRelPath).toBe('src/a.ts')
   })
 })
+
+describe('files store · md 三模式偏好', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+  })
+
+  it('默认 editor&preview（split）', () => {
+    expect(useFilesStore().mdMode).toBe('split')
+  })
+
+  it('setMdMode 即时生效并写入全局偏好', () => {
+    const store = useFilesStore()
+    store.setMdMode('preview')
+    expect(store.mdMode).toBe('preview')
+    expect(localStorage.getItem('lynel:md-mode')).toBe('preview')
+  })
+
+  it('新建 store 读取全局偏好；非法值回落 split', () => {
+    localStorage.setItem('lynel:md-mode', 'editor')
+    setActivePinia(createPinia())
+    expect(useFilesStore().mdMode).toBe('editor')
+    localStorage.setItem('lynel:md-mode', 'bogus')
+    setActivePinia(createPinia())
+    expect(useFilesStore().mdMode).toBe('split')
+  })
+
+  it('按会话记忆：切走再切回恢复该会话的模式', async () => {
+    const store = useFilesStore()
+    await store.setSession('s1', '/repo')
+    store.setMdMode('preview')
+    await store.setSession('s2', '/other')
+    // 新会话采用全局偏好（此时全局已是 preview）
+    expect(store.mdMode).toBe('preview')
+    store.setMdMode('editor')
+    await store.setSession('s1', '/repo')
+    expect(store.mdMode).toBe('preview')
+  })
+
+  it('无现场的新会话采用全局偏好，不继承别的会话最后一次模式', async () => {
+    const store = useFilesStore()
+    await store.setSession('s1', '/repo')
+    store.setMdMode('editor')
+    localStorage.setItem('lynel:md-mode', 'split')
+    await store.setSession('s2', '/other')
+    expect(store.mdMode).toBe('split')
+  })
+})

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Icon from '../Icon.vue'
+import MarkdownPreview from './MarkdownPreview.vue'
 import { pushToast } from '../../composables/useToast'
-import { useFilesStore, type OpenFile } from '../../stores/files'
+import { useFilesStore, type OpenFile, type MdMode } from '../../stores/files'
 import { useSettingsStore } from '../../stores/settings'
 import { ensureMonaco, applyMonacoTheme, currentThemeId } from '../../monaco/setup'
 import { languageForPath } from '../../monaco/languages'
@@ -42,6 +43,40 @@ function relayoutOnVisible() {
 const activeFile = computed<OpenFile | null>(
   () => store.openFiles.find((o) => o.relPath === store.activeRelPath) ?? null,
 )
+
+// ---------- Markdown 三模式 ----------
+// 全应用只有一个 Monaco 实例：三模式只是同一编辑器的布局切换，
+// editorEl 必须常驻同一 DOM 节点（用 v-show，不能用 v-if 反复重建）。
+const isMarkdown = computed(() => /\.(md|markdown)$/i.test(activeFile.value?.relPath ?? ''))
+const showEditorHost = computed(() => !isMarkdown.value || store.mdMode !== 'preview')
+const showPreview = computed(() => isMarkdown.value && store.mdMode !== 'editor')
+/** 预览直接复用 store 草稿，不额外读文件 / 不走 IPC。
+ *  脏判断与 switchModel 保持一致，避免 reload 中间态显示旧草稿。 */
+const previewText = computed(() => {
+  const f = activeFile.value
+  if (!f || !isMarkdown.value) return ''
+  return f.dirty && store.drafts[f.relPath] !== undefined ? store.drafts[f.relPath]! : f.content
+})
+
+/** Monaco 在 display:none 下会被布局成 0×0，尺寸变化后必须补一次 layout。
+ *  与下方 activeView watch 的坑同源：automaticLayout 的 ResizeObserver 未必再触发。 */
+function relayout() {
+  if (typeof requestAnimationFrame !== 'function') { editor?.layout(); return }
+  requestAnimationFrame(() => editor?.layout())
+}
+
+/** 三模式图标化：中文标签放进 title / aria-label，避免文字按钮挤占编辑器宽度。 */
+const mdModes: { value: MdMode; label: string; icon: string }[] = [
+  { value: 'editor', label: '仅编辑', icon: 'pencil' },
+  { value: 'split', label: '编辑 + 预览', icon: 'columns-2' },
+  { value: 'preview', label: '仅预览', icon: 'eye' },
+]
+
+function setMode(mode: MdMode) {
+  store.setMdMode(mode)
+}
+
+watch(() => store.mdMode, () => { void nextTick(relayout) })
 
 /** 应用当前终端主题：由 monaco/setup 构建主题（内部同步 data-term-theme 并读 CSS 变量）并应用到 live 编辑器。
  *  settings.cfg.terminal.theme 由 watch 触发时已是新值；未加载时回退 data-term-theme 属性。 */
@@ -120,11 +155,15 @@ async function switchModel() {
   model.onDidChangeContent(() => onModelChange(rel))
   ed.setModel(model)
   activeModelRelPath = f.relPath
+  // 首次打开 md 时若处于分栏/预览模式，宿主可能刚从隐藏态恢复，补一次布局
+  relayout()
 }
 
 async function saveActive() {
   const f = activeFile.value
   if (!f || !model || activeModelRelPath !== f.relPath) return
+  // 纯预览模式是只读视图，不响应 Ctrl+S（Monaco 虽隐藏但仍持有命令绑定）
+  if (isMarkdown.value && store.mdMode === 'preview') return
   if (!f.dirty && !f.externalChanged) return
   try {
     await store.saveFile(f.relPath, model.getValue())
@@ -157,7 +196,7 @@ watch(
   async (v) => {
     if (v !== 'file') return
     await nextTick()
-    requestAnimationFrame(() => editor?.layout())
+    relayout()
   },
 )
 
@@ -214,10 +253,43 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="code-editor">
-    <div v-if="!activeFile" class="editor-empty">从左侧文件树选择文件</div>
-    <div v-else-if="activeFile.binary" class="editor-placeholder">二进制文件，无法编辑</div>
-    <div v-else-if="activeFile.truncated" class="editor-placeholder">文件过大（只读，已截断显示）</div>
-    <div v-else ref="editorEl" class="editor-host" />
+    <div v-if="isMarkdown && activeFile && !activeFile.binary && !activeFile.truncated" class="md-mode-bar">
+      <div class="md-seg" role="group" aria-label="Markdown 视图模式">
+        <button
+          v-for="m in mdModes"
+          :key="m.value"
+          class="md-seg-btn"
+          :class="{ active: store.mdMode === m.value }"
+          :title="m.label"
+          :aria-label="m.label"
+          :aria-pressed="store.mdMode === m.value"
+          @click="setMode(m.value)"
+        >
+          <Icon :name="m.icon" :size="14" />
+        </button>
+      </div>
+      <span class="md-mode-spacer" />
+      <span class="md-mode-hint">{{ store.mdMode === 'preview' ? '只读预览' : 'Ctrl+S 保存' }}</span>
+    </div>
+
+    <div class="editor-body" :class="{ 'md-split': isMarkdown && store.mdMode === 'split' }">
+      <div v-if="!activeFile" class="editor-empty">从左侧文件树选择文件</div>
+      <div v-else-if="activeFile.binary" class="editor-placeholder">二进制文件，无法编辑</div>
+      <div v-else-if="activeFile.truncated" class="editor-placeholder">文件过大（只读，已截断显示）</div>
+      <template v-else>
+        <!-- editorEl 常驻同一节点：三模式只用 v-show / CSS 改变布局，不重建 Monaco -->
+        <div v-show="showEditorHost" ref="editorEl" class="editor-host" />
+        <MarkdownPreview
+          v-if="isMarkdown"
+          v-show="showPreview"
+          class="md-preview-pane"
+          :text="previewText"
+          :base-dir="store.workDir"
+          :rel-path="activeFile?.relPath ?? ''"
+        />
+      </template>
+    </div>
+
     <div v-if="activeFile?.externalChanged" class="conflict-bar">
       <Icon name="warning" :size="13" />
       <span>文件已在外部变更</span>
@@ -255,6 +327,66 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
 }
+.md-mode-bar {
+  flex-shrink: 0;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+/* 独立样式：全局 .seg 在 base.css / tasks.css 里有两套用途不同的定义，避免互相覆盖 */
+.md-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-md);
+  background: var(--bg-hover);
+}
+.md-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.md-seg-btn:hover { color: var(--text-primary); }
+.md-seg-btn.active {
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-card);
+}
+.md-seg-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.md-mode-spacer { flex: 1; }
+.md-mode-hint { font-size: 11px; color: var(--text-tertiary); }
+.editor-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.editor-body.md-split { flex-direction: row; }
+.editor-body.md-split > .editor-host {
+  flex: 1 1 50%;
+  width: 50%;
+  border-right: 1px solid var(--border);
+}
+.editor-body.md-split > :deep(.md-preview-pane) {
+  flex: 1 1 50%;
+  width: 50%;
+  min-width: 0;
+}
+.md-preview-pane { min-height: 0; min-width: 0; }
 .conflict-bar {
   display: flex;
   align-items: center;

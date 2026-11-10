@@ -19,6 +19,22 @@ export interface OpenFile {
   savedVersion: number // 打开/保存时自增，用于区分本地改动与外部变更
 }
 
+/** Markdown 文件的编辑器/预览布局模式：纯编辑 / 左右分栏 / 纯预览。 */
+export type MdMode = 'editor' | 'split' | 'preview'
+
+const MD_MODE_KEY = 'lynel:md-mode'
+const MD_MODE_DEFAULT: MdMode = 'split'
+
+/** 全局偏好（localStorage）。读取失败或非合法值一律回落默认值，
+ *  保证在测试环境 / 隐私模式下 store 仍可正常创建。 */
+function readMdMode(): MdMode {
+  try {
+    const v = localStorage.getItem(MD_MODE_KEY)
+    if (v === 'editor' || v === 'split' || v === 'preview') return v
+  } catch { /* localStorage 不可用 */ }
+  return MD_MODE_DEFAULT
+}
+
 /** 按会话记忆的工作区现场（tab / 草稿 / 激活文件 / 展开态 / 右栏展开态） */
 export interface SessionWorkspace {
   openFiles: OpenFile[]
@@ -29,6 +45,8 @@ export interface SessionWorkspace {
   splitOpen: boolean
   /** 文件树是否折叠：首次进入默认展开，之后以该会话上一次状态为准 */
   collapsed: boolean
+  /** 该会话最后一次使用的 md 布局模式；老快照缺字段时回落全局偏好 */
+  mdMode: MdMode
 }
 
 export const useFilesStore = defineStore('files', () => {
@@ -66,6 +84,13 @@ export const useFilesStore = defineStore('files', () => {
   /** 会话右栏（文件工作区折叠栏）是否展开。与文件 tab 组一起按会话记忆：
    *  切回会话时右栏仍是上次那组文件，语义连贯。 */
   const splitOpen = ref(false)
+  /** md 文件的布局模式：全局偏好作为初值，切会话时按现场还原 */
+  const mdMode = ref<MdMode>(readMdMode())
+
+  function setMdMode(mode: MdMode) {
+    mdMode.value = mode
+    try { localStorage.setItem(MD_MODE_KEY, mode) } catch { /* localStorage 不可用 */ }
+  }
 
   // 每个会话独立记忆的工作区现场。切换会话即时还原。
   const sessionState = ref<Record<string, SessionWorkspace>>({})
@@ -87,6 +112,7 @@ export const useFilesStore = defineStore('files', () => {
           expanded: [...expanded.value],
           splitOpen: splitOpen.value,
           collapsed: collapsed.value,
+          mdMode: mdMode.value,
         },
       }
     }
@@ -114,6 +140,8 @@ export const useFilesStore = defineStore('files', () => {
       splitOpen.value = saved.splitOpen && saved.openFiles.length > 0
       // 树折叠态以该会话上一次状态为准
       collapsed.value = saved.collapsed
+      // 老快照可能没有 mdMode 字段，回落全局偏好
+      mdMode.value = saved.mdMode ?? readMdMode()
     } else {
       openFiles.value = []
       drafts.value = {}
@@ -122,6 +150,8 @@ export const useFilesStore = defineStore('files', () => {
       splitOpen.value = false
       // 首次进入默认展开文件树，不继承上一个会话的折叠残留
       collapsed.value = false
+      // 新会话采用全局偏好（即用户最近一次选择的模式）
+      mdMode.value = readMdMode()
     }
     // 4. 挂载新目录 watcher + 拉取根目录；恢复的展开目录内容需重新惰性拉取
     if (wd) {
@@ -466,7 +496,7 @@ export const useFilesStore = defineStore('files', () => {
   return {
     workDir, currentSessionId, tree, expanded, openFiles, drafts, activeRelPath, collapsed,
     createAtRequest, selectedRelPath, clipboard, dragRel, dropTargetRel,
-    splitOpen,
+    splitOpen, mdMode, setMdMode,
     diffRequest, activeView, openDiff, closeDiff, activateFile,
     setSession, forgetSession, loadDir, toggleExpand, openFile, openInSplit, closeFile, saveFile, reloadFile,
     setDraft, clearDraft,
